@@ -58,3 +58,7 @@ dkms.conf
 build/
 install/
 .vscode/
+
+# sample files
+*.h264
+*.framemd5

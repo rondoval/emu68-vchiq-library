@@ -1,0 +1,26 @@
+==id $Id: videocodec_backend.sfd $
+* "a videocodec.library backend (LIBS:videocodec/<name>.codec)"
+* SPDX-License-Identifier: BSD-3-Clause
+==base _VCBackendBase
+==basetype struct Library *
+==libname videocodec_backend.library
+==bias 30
+==public
+==include <exec/types.h>
+==include <libraries/videocodec_backend.h>
+LONG VCB_GetInfo(struct VCInfo *info) (A0)
+LONG VCB_QueryCodec(ULONG index, struct VCCodecInfo *info) (D0,A0)
+APTR VCB_OpenSession(struct VCSessionParams *params, LONG *error) (A0,A1)
+VOID VCB_CloseSession(APTR session) (A0)
+struct VCPacket *VCB_ImportPacket(APTR session, ULONG side, APTR data, ULONG capacity) (A0,D0,A1,D1)
+struct VCFrame *VCB_ImportFrame(APTR session, ULONG side, APTR data) (A0,D0,A1)
+LONG VCB_SendPacket(APTR session, struct VCPacket *packet) (A0,A1)
+LONG VCB_SendFrame(APTR session, struct VCFrame *frame) (A0,A1)
+LONG VCB_Poll(APTR session, struct VCItem *item) (A0,A1)
+VOID VCB_ReleaseFrame(APTR session, struct VCFrame *frame) (A0,A1)
+VOID VCB_ReleasePacket(APTR session, struct VCPacket *packet) (A0,A1)
+LONG VCB_Flush(APTR session) (A0)
+LONG VCB_SetAttrs(APTR session, struct VCSessionParams *params) (A0,A1)
+LONG VCB_Image(struct VCImageParams *params) (A0)
+VOID VCB_Idle() ()
+==end

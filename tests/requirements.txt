@@ -1,0 +1,6 @@
+pytest
+pytest-timeout
+numpy
+pyserial
+pillow
+pypng

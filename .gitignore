@@ -59,6 +59,18 @@ build/
 install/
 .vscode/
 
-# sample files
+# sample files (the test material is made into tests/.cache)
 *.h264
 *.framemd5
+
+# the test harness: run directories, the material cache and its venv
+tests/runs/
+tests/.cache/
+tests/.venv/
+
+# Python
+__pycache__/
+*.pyc
+tests/.pytest_cache/
+
+TODO.md

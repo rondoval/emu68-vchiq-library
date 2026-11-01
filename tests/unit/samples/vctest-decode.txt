@@ -1,0 +1,37 @@
+format=1
+command=DECODE
+cli=3
+videocodec.version=1.4
+decode.file=RAM:hw/clip42.h264
+decode.codec=H264
+decode.framed=no
+stream.0.format=I420
+stream.0.width=1920
+stream.0.height=1080
+stream.0.mem_width=1920
+stream.0.mem_height=1088
+stream.0.fps_num=30
+stream.0.fps_den=1
+stream.0.par_num=1
+stream.0.par_den=1
+stream.0.colorspace=0x1
+  first frame: 1920x1080 I420, 3133440 bytes, planes at 0, 2088960, 2611200
+frame.first.bytes=3133440
+decode.frames=300
+decode.ms=3456
+decode.fps=86.8
+decode.in_bytes=755715
+decode.in_packets=300
+decode.busy_pct=12
+decode.eos=yes
+decode.idle=no
+ref.count=300
+ref.compared=300
+ref.mismatches=0
+flush.after=100
+flush.rc=0
+flush.frames=200
+flush.stale=0
+flush.untimed=0
+  300 frames compared, 0 mismatches
+PASS

@@ -1,0 +1,14 @@
+format=1
+command=IMAGE
+cli=5
+videocodec.version=1.4
+image.file=RAM:hw/jprog.jpg
+header.codec=JPEG
+header.width=640
+header.height=480
+image.rc=-6
+image.us=1834
+error=-6
+fail=VC_DecodeImage refused the picture
+  the decoder does not take progressive JPEGs
+FAIL

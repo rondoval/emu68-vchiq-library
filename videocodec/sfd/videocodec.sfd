@@ -1,0 +1,40 @@
+==id $Id: videocodec.sfd $
+* "videocodec.library"
+* SPDX-License-Identifier: BSD-3-Clause
+==base _VideoCodecBase
+==basetype struct Library *
+==libname videocodec.library
+==bias 30
+==public
+==include <exec/types.h>
+==include <exec/tasks.h>
+==include <utility/tagitem.h>
+==include <libraries/videocodec.h>
+struct VCSession *VC_OpenSessionTagList(struct TagItem *tags) (A0)
+==varargs
+struct VCSession *VC_OpenSessionTags(Tag tag1, ...) (A0)
+VOID VC_CloseSession(struct VCSession *session) (A0)
+struct VCPacket *VC_ImportPacket(struct VCSession *session, ULONG side, APTR data, ULONG capacity) (A0,D0,A1,D1)
+struct VCFrame *VC_ImportFrame(struct VCSession *session, ULONG side, APTR data) (A0,D0,A1)
+LONG VC_SendPacket(struct VCSession *session, struct VCPacket *packet) (A0,A1)
+LONG VC_SendFrame(struct VCSession *session, struct VCFrame *frame) (A0,A1)
+LONG VC_Poll(struct VCSession *session, struct VCItem *item) (A0,A1)
+VOID VC_ReleaseFrame(struct VCSession *session, struct VCFrame *frame) (A0,A1)
+VOID VC_ReleasePacket(struct VCSession *session, struct VCPacket *packet) (A0,A1)
+LONG VC_Flush(struct VCSession *session) (A0)
+LONG VC_SetAttrsTagList(struct VCSession *session, struct TagItem *tags) (A0,A1)
+==varargs
+LONG VC_SetAttrsTags(struct VCSession *session, Tag tag1, ...) (A0,A1)
+LONG VC_QueryCodec(ULONG index, struct VCCodecInfo *info) (D0,A0)
+LONG VC_GetBackendInfo(ULONG index, struct VCInfo *info) (D0,A0)
+LONG VC_DecodeImageTagList(struct TagItem *tags) (A0)
+==varargs
+LONG VC_DecodeImageTags(Tag tag1, ...) (A0)
+LONG VC_EncodeImageTagList(struct TagItem *tags) (A0)
+==varargs
+LONG VC_EncodeImageTags(Tag tag1, ...) (A0)
+LONG VC_ConvertImageTagList(struct TagItem *tags) (A0)
+==varargs
+LONG VC_ConvertImageTags(Tag tag1, ...) (A0)
+LONG VC_GetImageInfo(APTR data, ULONG length, struct VCImageInfo *info) (A0,D0,A1)
+==end

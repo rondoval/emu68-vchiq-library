@@ -47,8 +47,8 @@ From the component root:
 
 ## Rules
 
-1. **BSD-3-Clause.** GPL code is forbidden. `tools/vcgrab/mkv.c` comes from
-   libvpx's BSD libmkv and keeps its notice.
+1. **BSD-3-Clause.** GPL code is forbidden. The `tools/vcgrab/mkv` submodule
+   (mkv-writer) comes from libvpx's BSD libmkv and keeps its notice.
 2. **Layering.** The frontend includes no vchiq or MMAL header (its CMake gives
    it none). The backend parses no tags (it gets `struct VCSessionParams`).
    `videocore/`, `ahi/` and the tools include only `devices/vchiq.h` of
@@ -225,5 +225,5 @@ public headers reach the others only through a copy in the build tree
 | `ahi/` | `audio_lib.c`, `audio_sub.c` (the `AHIsub_*` calls), `audio_slave.c`; `modefile.py` writes the mode file in the build |
 | `datatype/` | `vcjpeg_class.c`, `vcjpeg_recog.c` (linked on its own, entry first); `descriptor.py` writes and checks the descriptor in the build |
 | `shared/` | `image_info.c` (a still picture's header), `include/auds_proto.h` (the AUDS wire format) |
-| `tools/` | `VCInfo.c`, the examples, `VPUPlay.c`; `vcgrab/` the recorder, its muxer `mkv.c` free of Amiga headers for the host's tests; `vctest/` one file per command; `common/` the rigs' shared code, never the examples' |
+| `tools/` | `VCInfo.c`, the examples, `VPUPlay.c`; `vcgrab/` the recorder, its muxer the `mkv` submodule (mkv-writer, tested there); `vctest/` one file per command; `common/` the rigs' shared code, never the examples' |
 | `tests/` | `conftest.py` the fixtures, `harness/`, `test_*.py` one module per area, `unit/` host-only, `baselines.json`; `.cache/`, `.venv/` and `runs/` are not checked in |

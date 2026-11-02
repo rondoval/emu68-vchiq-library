@@ -519,7 +519,7 @@ Its facts come out in VCTest's grammar (`stream.N.*`, `screen.*`, `output.N.*`,
 The user's recorder (README, Recording the screen), in
 `SYS:Tools/Commodities/`, written up in `tools/vcgrab/`. `screen.c` finds the
 screen and says where it is at each tick, `record.c` runs the encoder session,
-`mkv.c` writes the file, `still.c` is the two image calls, `settings.c` what is
+the `mkv` submodule writes the file, `still.c` is the two image calls, `settings.c` what is
 asked for and `ENV:VCGrab.prefs`, `window.c` the ReAction window, `commodity.c`
 the broker and the loop around them, and `vcgrab.c` the arguments, the Workbench
 start and what is said to the user. It prints prose and ends with a report line
@@ -535,8 +535,9 @@ write and wait to be closed.
 `dist/VCGrab.info` is generated: `dist/icons/` holds its art, and
 `dist/icons/make_icons.py` builds it.
 
-`mkv.c` knows nothing of the Amiga, so `tests/unit/test_mkv.py` runs it on the
-host with the sanitizers on, against its own EBML reader and ffmpeg. mkvalidator
+The muxer is `rondoval/mkv-writer`, shared with Neptune and tested in its own
+repository, on the host with the sanitizers on, against its own EBML reader and
+ffmpeg; `test_vcgrab.py` borrows that reader from the submodule. mkvalidator
 reports `Missing element 'SeekID'` on every file without CRC-32 elements,
 ffmpeg's own included: its parser's fault, CRC-32 being optional.
 

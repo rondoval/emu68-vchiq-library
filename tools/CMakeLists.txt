@@ -104,10 +104,11 @@ add_executable(VCGrab
     vcgrab/window.c
     vcgrab/screen.c
     vcgrab/record.c
-    vcgrab/mkv.c
+    vcgrab/mkv/mkv.c
     vcgrab/still.c
 )
 target_compile_options(VCGrab PRIVATE ${VCHIQ_TOOL_COMPILE_OPTIONS})
+target_include_directories(VCGrab PRIVATE vcgrab/mkv) # the mkv-writer submodule
 target_compile_definitions(VCGrab PRIVATE
     VERSTAG="$VER: VCGrab ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR} ${CURRENT_DATE}"
 )

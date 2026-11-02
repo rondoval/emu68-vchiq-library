@@ -1,3 +1,11 @@
+# Release notes - emu68-vchiq-library 0.4
+
+VCGrab records as before. Its Matroska writer now lives in a project of its own,
+[mkv-writer](https://github.com/rondoval/mkv-writer), which Neptune's USBVideo
+uses too. Nothing else changes in this release.
+
+---
+
 # Release notes - emu68-vchiq-library 0.3
 
 First public release. Video, JPEG pictures and sound run on the Raspberry

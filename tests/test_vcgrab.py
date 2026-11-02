@@ -4,8 +4,10 @@ import os
 import re
 import struct
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,7 +16,9 @@ from harness.material import ffmpeg, sh
 from harness.pictures import BAR_COLOURS, judge_bars, key_frames, pattern, raw_bars
 from harness.tools import ZC_TROUBLE, assert_nothing_left, dt_page, judge_screen_bars, status, vctest
 from test_ahi import MODE_16BIT
-from unit.test_mkv import CLUSTER, CUES, File
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "vcgrab" / "mkv" / "tests"))  # the muxer's own file reader
+from test_mkv import CLUSTER, CUES, File  # noqa: E402
 
 W, H = 1920, 1080
 READINGS = [("bt601", False), ("bt601", True), ("bt709", False), ("bt709", True)]

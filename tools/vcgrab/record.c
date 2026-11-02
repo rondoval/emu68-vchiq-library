@@ -204,7 +204,8 @@ static BOOL file_open(struct record *r)
 		grab_fault(r->params->file);
 		return FALSE;
 	}
-	const struct mkv_track track = {MKV_H264, r->output_width, r->output_height, r->params->fps, "VCGrab"};
+	const struct mkv_track track = {
+		.codec = MKV_H264, .width = r->output_width, .height = r->output_height, .fps = r->params->fps, .app = "VCGrab"};
 	mkv_open(&r->mkv, &file_io, &track, r->mkv_memory, MKV_MEMORY);
 	return TRUE;
 }

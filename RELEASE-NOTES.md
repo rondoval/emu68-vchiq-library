@@ -1,8 +1,15 @@
 # Release notes - emu68-vchiq-library 0.4
 
-VCGrab records as before. Its Matroska writer now lives in a project of its own,
-[mkv-writer](https://github.com/rondoval/mkv-writer), which Neptune's USBVideo
-uses too. Nothing else changes in this release.
+- **Camera pictures on the VideoCore.** The converter now takes a USB
+  camera's uncompressed YUY2 and NV12 pictures, so Neptune's USBVideo can show
+  a live picture of those modes too. `VCInfo CODECS` lists what the converter
+  reads.
+- **For programmers:** `VCCodecInfo.InputFormats` names the pixel formats an
+  encoder or the converter reads, and others are refused at the open.
+  `Formats` is now `OutputFormats`, what a decoder or converter writes.
+- **VCGrab** records as before. Its Matroska writer now lives in a project of
+  its own, [mkv-writer](https://github.com/rondoval/mkv-writer), which
+  Neptune's USBVideo uses too.
 
 ---
 

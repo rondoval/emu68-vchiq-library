@@ -13,10 +13,10 @@
  * - At its first use by a Process, the frontend opens every file in the
  *   drawer whose name ends in .codec (any case; icons and other files are
  *   left alone).  It keeps the backend open until its own expunge.
- * - When its last opener closes it, the frontend calls VCB_Idle() (ABI 1.4
- *   and later), in that opener's task: what the backend keeps between calls
- *   for speed (a connection to the hardware, components set up) goes, and
- *   the next call makes it again.  The backend may wait for its hardware
+ * - When its last opener closes it, the frontend calls VCB_Idle(), in that
+ *   opener's task: what the backend keeps between calls for speed (a
+ *   connection to the hardware, components set up) goes, and the next call
+ *   makes it again.  The backend may wait for its hardware
  *   there, which its expunge must not.
  * - It calls VCB_GetInfo() first.  A backend is kept only if it reports the
  *   ABI major of this header and VCInfo.Codecs, the number of rows
@@ -55,25 +55,12 @@
 /*
  * The ABI version a backend reports in VCInfo.ABIVersion: major << 16 | minor.
  * The frontend keeps a backend only if the major matches its own.  A minor
- * step adds fields at the end of a structure or functions at the end of the
- * table, so either side reads a newer peer as far as its own sizeof and an
- * older one as far as the peer's Size.
- *
- * 1.0  The first: VCB_GetInfo, VCB_QueryCodec, sessions, objects.
- * 1.1  VCCodecInfo.Priority: set per row by the backend; a session goes to
- *      the row of the highest (a 1.0 row counts as software).
- *      VCInfo.Codecs: the number of rows, required in the handshake (a
- *      backend without it is refused).
- * 1.2  VCInfo.MemTotal, MemFree: the hardware's own memory its codecs
- *      allocate from, 0 if unknown.
- * 1.3  VCB_Image(): the image calls, one picture each (struct VCImageParams).
- *      VCCodecInfo.Flags: what a row serves, sessions (VCCF_Session) or
- *      image calls (VCCF_Image); a row without the field serves sessions.
- * 1.4  VCB_Idle(): the frontend's last opener closed it; the backend lets go
- *      of what it keeps between calls.
+ * step will add fields at the end of a structure or functions at the end of
+ * the table, so either side reads a newer peer as far as its own sizeof and
+ * an older one as far as the peer's Size.  1.0 is the first.
  */
 #define VCB_ABI_VERSION_MAJOR 1
-#define VCB_ABI_VERSION_MINOR 4
+#define VCB_ABI_VERSION_MINOR 0
 #define VCB_ABI_VERSION ((VCB_ABI_VERSION_MAJOR << 16) | VCB_ABI_VERSION_MINOR)
 #define VCB_ABI_MAJOR(v) ((v) >> 16)
 
@@ -83,8 +70,7 @@
  * backend can be hardware for one codec and software for another.  Higher
  * wins, ties by backend name; Exec's range, -128 to 127.  A row that is
  * faster than software but not dedicated hardware goes in between; one that
- * must win over the hardware for a reason of its own goes above.  A row of
- * an ABI 1.0 backend has no Priority and counts as software.
+ * must win over the hardware for a reason of its own goes above.
  */
 #define VCB_PRIORITY_HARDWARE 50 /* the codec runs on dedicated hardware */
 #define VCB_PRIORITY_SOFTWARE 0  /* the 68k does the work */

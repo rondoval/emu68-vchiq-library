@@ -49,6 +49,8 @@ ULONG codec_count(void);
 BOOL codec_still(ULONG codec);
 /* Whether the image calls take a kind and codec (a VCCF_Image row) */
 BOOL codec_image_allowed(ULONG kind, ULONG codec);
+/* Whether an encoder or the converter reads a pixel format (its row's InputFormats) */
+BOOL codec_reads(ULONG kind, ULONG codec, ULONG format);
 
 /* session_still.c: what the image decoder's pipeline does, for the image calls (videocore_image.c) */
 /* Whether the pipeline decodes a picture right, by its header; else software must */

@@ -72,7 +72,7 @@ static const struct pixel_format *format_choose(struct Screen *scr, ULONG codec)
 		if (ci.Codec != codec || ci.Kind != VCK_Decoder || (ci.Flags & VCCF_Image) == 0)
 			continue;
 		for (ULONG f = 0; f < FORMATS_NUM; f++)
-			if ((ci.Formats & VCF_MASK(formats[f].vcf)) && (pf == NULL || formats[f].rgb == screen_rgb))
+			if ((ci.OutputFormats & VCF_MASK(formats[f].vcf)) && (pf == NULL || formats[f].rgb == screen_rgb))
 				pf = &formats[f];
 		if (pf != NULL)
 			break;

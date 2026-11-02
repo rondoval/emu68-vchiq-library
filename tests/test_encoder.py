@@ -114,6 +114,13 @@ def test_a_refused_bit_rate_unwinds(device, artifacts):
     assert again.passed, again.kv.get("fail")
 
 
+def test_refuses_unlisted_input(device, material):
+    """An input format the H.264 encoder does not name (a camera's YUYV) is refused at the open, VCERR_UNSUPPORTED."""
+    r = vctest(device, f"ENCODE {material.ram('frame640.yuyv')} WIDTH 640 HEIGHT 480 FORMAT YUYV OUT RAM:hw/yuyv.h264")
+    assert not r.passed and r.kv.get("encode.session") == "refused", f"session {r.kv.get('encode.session')}: {r.kv.get('fail')}"
+    assert r.num("error") == -6, f"error {r.kv.get('error')}, not VCERR_UNSUPPORTED"
+
+
 def test_closing_with_the_tunnel_stalled(device, artifacts, record_property):
     """Packets held back, the encoder stopped behind them: the close takes no time and the service lives on."""
     worst = 0

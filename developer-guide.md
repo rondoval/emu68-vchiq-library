@@ -72,6 +72,15 @@ VC_CloseSession(s);
 | `VCK_Encoder` | frames | packets | `VCC_H264`, `VCC_JPEG` |
 | `VCK_Converter` | frames | frames | `VCC_Raw` |
 
+An encoder or converter reads the formats of its `VCCodecInfo.InputFormats`
+and refuses others at the open with `VCERR_UNSUPPORTED`; the converter's are the
+ones it writes and a camera's `VCF_YUYV` and `VCF_NV12`. `OutputFormats` says
+what a row writes: 0 for an encoder. NV12 goes as a camera sends it, the UV rows right
+after the picture's own; I420 keeps whole 16 rows. `VC_ConvertImage()` takes the
+same. The VideoCore reads YUV as full-range BT.601 whatever it is told, so a
+camera's video-range picture (16 to 235) comes out with its blacks at 16 and its
+whites at 235: a little flat, nothing lost.
+
 * **Objects.** Each side is a fixed set of `struct VCPacket` or `struct VCFrame`
   objects: the library's own (sized by `VCA_InputCount`/`InputSize`/
   `OutputCount`/`OutputSize`) or your memory, imported with
@@ -129,7 +138,7 @@ by two objects; import before the first send, and close the importing session
 first.
 
 To encode RGB, or at another size, no second session is needed. An H.264
-encoder takes every format of its `VCCodecInfo.Formats`, and scales to
+encoder takes every format of its `VCCodecInfo.InputFormats`, and scales to
 `VCA_OutputWidth` and `VCA_OutputHeight`: the backend puts the ISP in front of
 the encoder inside the VPU, and `VCGrab` sends the screen's own memory, imported
 as the session's one input frame. That frame stays out while the encoder is
@@ -255,7 +264,7 @@ let them go when a picture would not fit.
 
 `VC_QueryCodec(index, &info)` lists every backend's codec rows (index 0
 upward until it fails): codec, kind, size limit, `MaxLevel`, pixel formats
-(`Formats`, a mask: `info.Formats & VCF_MASK(VCF_RGB16)`), the backend's
+(`OutputFormats`, a mask: `info.OutputFormats & VCF_MASK(VCF_RGB16)`), the backend's
 name, the row's priority and what it serves (`Flags`: `VCCF_Session`,
 `VCCF_Image`).
 
@@ -297,12 +306,12 @@ backends are found and chosen. `videocore/` is the reference implementation.
 * `VCB_OpenSession()` receives a `struct VCSessionParams`, the frontend's
   parse of the client's tags; a backend never sees a tag. `Changed` marks
   what a `VCB_SetAttrs()` carries.
-* `VCB_Image()` (ABI 1.3) is one image call: a `struct VCImageParams` with
+* `VCB_Image()` is one image call: a `struct VCImageParams` with
   its kind, codec and both sides (compressed bytes or a picture, in the
   caller's memory), blocking in the caller's task. How the picture is made
   is the backend's; it fills `Written` for an encoder and must not keep its
   other callers out while it waits.
-* `VCB_Idle()` (ABI 1.4) comes when the frontend's last opener closes it, in
+* `VCB_Idle()` comes when the frontend's last opener closes it, in
   that opener's task: let go of what you keep between calls for speed (a
   connection, components set up); the next call makes it again. You may wait
   for your hardware there. An expunge with such things kept is refused until
@@ -690,7 +699,7 @@ the install reboot must log `[vchiq] up:` on a debug build, or the run stops.
 | `test_device.py` | the connection up, the codec table, a bulk transfer to the audio service, resume after an expunge |
 | `test_decoder.py` | bit-exact decodes, the backend named or refused, the decoder's rate, two at once, a JPEG through the video decoder, flush and replay, the shape change, the pixel aspect |
 | `test_players.py` | VPUPlay full screen and in a window, the colour bars, LOOP, two players, an empty stream, the shape change and pixel aspect on screen; VCPlay |
-| `test_images.py` | the image calls: decode, convert, encode; every still format, refusals, cut and big pictures, the headers; VCShow |
+| `test_images.py` | the image calls: decode, convert, encode; every still format, refusals, cut and big pictures, the headers; VCShow; a camera's YUYV and NV12 through the converter, a converter session's rate, an input format it refuses |
 | `test_encoder.py` | thirty pictures with key frames, a key frame on request; RGB through the ISP: each format, scaled, gaps in the times, the end mark alone, a refused bit rate, closing while stalled, noise |
 | `test_vcgrab.py` | VCGrab judged from its files: the bars as a player shows them, every pixel format through the ISP, scaling, refusals, a minute of 1080p, noise at the highest bit rate, stepping back, Ctrl-C at any moment, stills, the hot keys, playback through the VPU. With `VCGRAB_DISK=Stuff:` also the writing to that disk and a recording past 2 GiB and the stop near 4 GiB; with `VCGRAB_WRAP=1` a take across the Pi's timer wrap, up to 72 minutes' wait. Also a full disk, a screen closing, screens it must refuse, and takes beside a player, a decode, sound and a page of JPEGs |
 | `test_levels.py` | the H.264 limit probes: declared levels, reference frames, rates, sizes, profiles; MJPEG sizes against ffmpeg |

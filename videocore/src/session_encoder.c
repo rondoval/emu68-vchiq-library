@@ -245,8 +245,9 @@ static LONG encoder_formats(struct vc_session *session, BOOL jpeg)
  * The input pictures' layout is resolved; H.264 runs at 30 frames per second
  * unless told.
  *
- * Return: 0, VCERR_UNSUPPORTED for another codec or an unknown input format,
- * VCERR_BADPARAM for a size, pitch or level that does not exist.
+ * Return: 0, VCERR_UNSUPPORTED for another codec or an input format the
+ * encoder does not read (codec_reads()), VCERR_BADPARAM for a size, pitch or
+ * level that does not exist.
  */
 static LONG encoder_params(struct vc_session *session, BOOL jpeg)
 {
@@ -255,6 +256,8 @@ static LONG encoder_params(struct vc_session *session, BOOL jpeg)
 		return VCERR_UNSUPPORTED;
 	session->tunnelled = encoder_wants_isp(params);
 	LONG error = input_resolve(session, session->tunnelled);
+	if (error == 0 && !codec_reads(VCK_Encoder, params->Codec, params->InputFormat))
+		error = VCERR_UNSUPPORTED;
 	if (error != 0 || jpeg)
 		return error; /* the rest is H.264's */
 	if (session->tunnelled)

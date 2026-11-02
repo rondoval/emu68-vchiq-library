@@ -114,19 +114,19 @@ int do_status(struct tool *t, LONG *args)
 }
 
 /**
- * format_list() - A codec row's formats as a comma-separated list.
- * @ci:  the row
- * @out: room for the list
- * @room: its bytes
+ * format_list() - VCF_MASK()s as a comma-separated list of names.
+ * @formats: the mask
+ * @out:     room for the list
+ * @room:    its bytes
  *
  * Return: @out.
  */
-static const char *format_list(const struct VCCodecInfo *ci, char *out, ULONG room)
+static const char *format_list(ULONG formats, char *out, ULONG room)
 {
 	ULONG at = 0;
 	for (ULONG f = 0; f < 32; f++)
 	{
-		if (!(ci->Formats & VCF_MASK(f)))
+		if (!(formats & VCF_MASK(f)))
 			continue;
 		const char *s = format_name(f);
 		if (at != 0 && at < room - 1u)
@@ -163,7 +163,10 @@ int do_codecs(struct tool *t, LONG *args)
 		kv_unum(kv_at("codec", n, "max_width"), ci.MaxWidth);
 		kv_unum(kv_at("codec", n, "max_height"), ci.MaxHeight);
 		kv_unum(kv_at("codec", n, "level"), ci.MaxLevel);
-		kv_str(kv_at("codec", n, "formats"), format_list(&ci, list, sizeof(list)));
+		if (ci.OutputFormats != 0)
+			kv_str(kv_at("codec", n, "output_formats"), format_list(ci.OutputFormats, list, sizeof(list)));
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, InputFormats) && ci.InputFormats != 0)
+			kv_str(kv_at("codec", n, "input_formats"), format_list(ci.InputFormats, list, sizeof(list)));
 		kv_bool(kv_at("codec", n, "session"), (ci.Flags & VCCF_Session) != 0);
 		kv_bool(kv_at("codec", n, "image"), (ci.Flags & VCCF_Image) != 0);
 		kv_num(kv_at("codec", n, "priority"), ci.Priority);

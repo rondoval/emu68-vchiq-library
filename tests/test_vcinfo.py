@@ -7,9 +7,10 @@ import pytest
 from harness.results import expect
 
 CODEC_ROWS = (r"^11 codecs$", r"level 4\.0", r"H264 decoder: .*, session, priority", r"MJPEG decoder: .*, session, priority",
-              r"H264 encoder: .*, session, priority", r"JPEG encoder: .*, session, image call,",
-              r"raw converter: .*, session, image call,",
-              *(rf"{c} decoder: .*formats I420 RGB16 RGB24 BGR24 BGRA32 RGBA32; [^,]+, image call,"
+              r"H264 encoder: .*; reads I420 RGB16 RGB24 BGR24 BGRA32 RGBA32; [^,]+, session, priority",
+              r"JPEG encoder: .*; reads I420 RGBA32; [^,]+, session, image call,",
+              r"raw converter: .*; reads I420 NV12 RGB16 RGB24 BGR24 BGRA32 RGBA32 YUYV; [^,]+, session, image call,",
+              *(rf"{c} decoder: .*writes I420 RGB16 RGB24 BGR24 BGRA32 RGBA32; [^,]+, image call,"
                 for c in ("JPEG", "PNG", "GIF", "BMP", "TGA", "PPM")))
 
 

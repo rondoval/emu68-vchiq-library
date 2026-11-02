@@ -5,6 +5,7 @@ import pytest
 from harness.tools import assert_nothing_left, status, vctest
 
 STILL_FORMATS = "I420,RGB16,RGB24,BGR24,BGRA32,RGBA32"
+CONVERTER_READS = "I420,NV12,RGB16,RGB24,BGR24,BGRA32,RGBA32,YUYV"  # the ISP's own and a camera's
 
 
 @pytest.mark.smoke
@@ -19,7 +20,7 @@ def test_connection_up(device, record_property):
 
 @pytest.mark.smoke
 def test_codec_table(device):
-    """VCTest CODECS: eleven rows; the streams on sessions, the stills on image calls, every still decoder in six formats."""
+    """VCTest CODECS: eleven rows; the streams on sessions, the stills on image calls, every still decoder in six formats, the converter reading a camera's too."""
     r = vctest(device, "CODECS", 30)
     assert r.passed, r.kv.get("fail")
     rows = r.group("codec")
@@ -33,9 +34,15 @@ def test_codec_table(device):
     for name in ("JPEG", "PNG", "GIF", "BMP", "TGA", "PPM"):
         row = by_name[(name, "decoder")]
         assert row["image"] == "yes", f"{name} decoder: no image calls"
-        assert row["formats"] == STILL_FORMATS, f"{name} decoder writes {row['formats']}"
+        assert row["output_formats"] == STILL_FORMATS, f"{name} decoder writes {row['output_formats']}"
     assert by_name[("JPEG", "encoder")]["image"] == "yes"
-    assert by_name[("raw", "converter")]["image"] == "yes"
+    converter = by_name[("raw", "converter")]
+    assert converter["image"] == "yes"
+    assert converter.get("input_formats") == CONVERTER_READS, f"the converter reads {converter.get('input_formats')}"
+    for name, reads in (("H264", STILL_FORMATS), ("JPEG", "I420,RGBA32")):
+        encoder = by_name[(name, "encoder")]
+        assert encoder.get("input_formats") == reads and "output_formats" not in encoder, f"{name} encoder: {encoder}"
+    assert not [c for c in rows if c["kind"] == "decoder" and "input_formats" in c], "input formats on a decoder's row"
 
 
 @pytest.mark.smoke

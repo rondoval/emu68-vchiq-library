@@ -150,7 +150,7 @@ LONG shape_resolve(struct vc_session *session)
 		return VCERR_BADPARAM;
 
 	struct vc_geometry geometry;
-	if (!picture_geometry(format, row_pixels, height, pitch, &geometry))
+	if (!picture_geometry(format, row_pixels, height, pitch, FALSE, &geometry))
 		return VCERR_BADPARAM;
 
 	struct VCRect dest;
@@ -504,7 +504,8 @@ static void converter_stream(struct vc_session *session, const struct VCRect *so
  * The output shape is resolved from the input picture as a decoder's would
  * be from the stream's shape.  The output format defaults to the input's.
  *
- * Return: 0 or the error.
+ * Return: 0, VCERR_UNSUPPORTED for an input format the converter does not
+ * read (codec_reads()), or the error.
  */
 static LONG converter_open(struct vc_session *session)
 {
@@ -515,6 +516,8 @@ static LONG converter_open(struct vc_session *session)
 	LONG error = input_resolve(session, TRUE);
 	if (error != 0)
 		return error;
+	if (!codec_reads(VCK_Converter, VCC_Raw, params->InputFormat))
+		return VCERR_UNSUPPORTED;
 	if (params->OutputFormat == 0)
 		params->OutputFormat = params->InputFormat;
 

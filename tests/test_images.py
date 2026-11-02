@@ -91,6 +91,46 @@ def test_convert_800_rows(device, material, baselines, artifacts):
     baselines.check("convert_800x600.psnr_db", round(score, 1), higher=True, tolerance=2.0)
 
 
+CAMERA_PIX_FMT = {"YUYV": "yuyv422", "NV12": "nv12"}
+
+
+def camera_src(material, name, w, h, fmt):
+    """ffmpeg's input arguments for the host's copy of a camera's picture."""
+    return ["-f", "rawvideo", "-pix_fmt", CAMERA_PIX_FMT[fmt], "-s", f"{w}x{h}", "-i", str(material.path(name))]
+
+
+@pytest.mark.parametrize("name, w, h, fmt", [("frame640.yuyv", 640, 480, "YUYV"), ("frame640.nv12", 640, 480, "NV12"),
+                                             ("frame1080.nv12", 1920, 1080, "NV12")], ids=["yuyv640", "nv12-640", "nv12-1080"])
+def test_convert_camera_formats(device, material, baselines, artifacts, name, w, h, fmt):
+    """A camera's YUYV and NV12 to RGB24, NV12's chroma right after its 1080 rows as a camera sends it; read as full-range BT.601, the firmware's only reading."""
+    r = vctest(device, f"CONVERT {material.ram(name)} WIDTH {w} HEIGHT {h} FORMAT {fmt} OUTFORMAT RGB24 OUT RAM:hw/cam.ppm", 60)
+    assert r.passed, f"VC_ConvertImage {r.kv.get('convert.rc')}: {r.kv.get('fail')}"
+    pic = fetch_ppm(device, "RAM:hw/cam.ppm", artifacts, f"{name}.ppm")
+    score, how = best_psnr(pic, ref_rgb(camera_src(material, name, w, h, fmt), w, h))
+    assert how == "bt601/full", f"read as {how} ({score:.1f} dB): the firmware's reading changed (docs/firmware-facts.md)"
+    baselines.check(f"convert_{name}.psnr_db", round(score, 1), higher=True, tolerance=2.0)
+
+
+@pytest.mark.parametrize("name, w, h", [("frame640.yuyv", 640, 480), ("frame720.yuyv", 1280, 720)], ids=["640x480", "1280x720"])
+def test_converter_session_rate(device, material, baselines, artifacts, record_property, name, w, h):
+    """A camera's YUYV through a converter session into a screen's BGRA32, 150 times: at least 30 a second, what a preview needs."""
+    r = vctest(device, f"CONVERT {material.ram(name)} WIDTH {w} HEIGHT {h} FORMAT YUYV OUTFORMAT BGRA32 COUNT 150 OUT RAM:hw/rate.raw", 120)
+    assert r.passed, f"{r.kv.get('fail')}, error {r.kv.get('error')}"
+    device.delete("RAM:hw/rate.raw")
+    fps = r.num("convert.fps")
+    record_property("rate", f"{fps} pictures a second, {r.num('convert.per_picture_us')} us each, open {r.num('convert.open_us')} us")
+    assert r.num("convert.pictures") == 150, f"{r.kv.get('convert.pictures')} pictures"
+    assert fps >= 30, f"{fps} pictures a second"
+    baselines.check(f"converter_{w}x{h}.fps", fps, higher=True, tolerance="20%")
+
+
+def test_converter_refuses_unlisted(device, material):
+    """An input format the converter does not name (UYVY) is refused at the open, VCERR_UNSUPPORTED, not left to the firmware."""
+    r = vctest(device, f"CONVERT {material.ram('frame640.yuyv')} WIDTH 640 HEIGHT 480 FORMAT UYVY OUTFORMAT RGB24 COUNT 1 OUT RAM:hw/x.ppm")
+    assert not r.passed and r.kv.get("convert.session") == "refused", f"session {r.kv.get('convert.session')}: {r.kv.get('fail')}"
+    assert r.num("error") == -6, f"error {r.kv.get('error')}, not VCERR_UNSUPPORTED"
+
+
 @pytest.mark.smoke
 def test_jpeg_encode(device, material, baselines, artifacts, record_property):
     """VC_EncodeImage: a 1080p frame to a JPEG at quality 80, which ffmpeg decodes back close to the frame."""

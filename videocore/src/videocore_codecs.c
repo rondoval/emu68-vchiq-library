@@ -9,9 +9,11 @@
 #include <videocore_private.h>
 #include <session_internal.h>
 
-/* What the ISP writes and reads, and what each encoder reads (VCCodecInfo.Formats): H.264 goes through the ISP for all but I420 */
+/* What the ISP writes, and what the H.264 encoder reads: it goes through the ISP for all but I420 */
 #define ISP_FORMATS \
 	(VCF_MASK(VCF_I420) | VCF_MASK(VCF_RGB16) | VCF_MASK(VCF_RGB24) | VCF_MASK(VCF_BGR24) | VCF_MASK(VCF_BGRA32) | VCF_MASK(VCF_RGBA32))
+/* What the converter reads: the ISP's own formats and a camera's YUYV and NV12 */
+#define ISP_INPUT_FORMATS (ISP_FORMATS | VCF_MASK(VCF_YUYV) | VCF_MASK(VCF_NV12))
 #define JPEG_INPUT_FORMATS (VCF_MASK(VCF_I420) | VCF_MASK(VCF_RGBA32))
 
 #define BOTH (VCCF_Session | VCCF_Image)
@@ -19,24 +21,26 @@
 /*
  * The still pictures are image calls only (videocore_image.c), written in
  * any format: by the pipeline itself where it writes that format and
- * layout, else through the converter.
+ * layout, else through the converter.  output_formats is what a decoder or
+ * converter writes; input_formats what an encoder or converter reads, which
+ * its sessions keep to (codec_reads()).
  */
 static const struct
 {
 	UWORD codec, kind, max_level, flags;
-	ULONG formats;
+	ULONG output_formats, input_formats;
 } codec_table[] = {
-    {VCC_H264, VCK_Decoder, 42, VCCF_Session, ISP_FORMATS}, /* in real time at 4.2's ceiling; the level is not checked */
-    {VCC_MJPEG, VCK_Decoder, 0, VCCF_Session, ISP_FORMATS},
-    {VCC_JPEG, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS},
-    {VCC_PNG, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS},
-    {VCC_GIF, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS},
-    {VCC_BMP, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS},
-    {VCC_TGA, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS},
-    {VCC_PPM, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS},
-    {VCC_Raw, VCK_Converter, 0, BOTH, ISP_FORMATS},
-    {VCC_JPEG, VCK_Encoder, 0, BOTH, JPEG_INPUT_FORMATS},
-    {VCC_H264, VCK_Encoder, 40, VCCF_Session, ISP_FORMATS}, /* specified at level 4.0; higher levels in the headers */
+    {VCC_H264, VCK_Decoder, 42, VCCF_Session, ISP_FORMATS, 0}, /* in real time at 4.2's ceiling; the level is not checked */
+    {VCC_MJPEG, VCK_Decoder, 0, VCCF_Session, ISP_FORMATS, 0},
+    {VCC_JPEG, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
+    {VCC_PNG, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
+    {VCC_GIF, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
+    {VCC_BMP, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
+    {VCC_TGA, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
+    {VCC_PPM, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
+    {VCC_Raw, VCK_Converter, 0, BOTH, ISP_FORMATS, ISP_INPUT_FORMATS},
+    {VCC_JPEG, VCK_Encoder, 0, BOTH, 0, JPEG_INPUT_FORMATS},
+    {VCC_H264, VCK_Encoder, 40, VCCF_Session, 0, ISP_FORMATS}, /* specified at level 4.0; higher levels in the headers */
 };
 
 /**
@@ -62,6 +66,22 @@ BOOL codec_image_allowed(ULONG kind, ULONG codec)
 	for (u32 i = 0; i < ARRAY_SIZE(codec_table); i++)
 		if (codec_table[i].kind == kind && codec_table[i].codec == codec)
 			return (codec_table[i].flags & VCCF_Image) != 0;
+	return FALSE;
+}
+
+/**
+ * codec_reads() - Whether an encoder or the converter reads a pixel format.
+ * @kind:   VCK_*
+ * @codec:  VCC_*
+ * @format: VCF_*
+ *
+ * Return: TRUE for a format of the row's input formats.
+ */
+BOOL codec_reads(ULONG kind, ULONG codec, ULONG format)
+{
+	for (u32 i = 0; i < ARRAY_SIZE(codec_table); i++)
+		if (codec_table[i].kind == kind && codec_table[i].codec == codec)
+			return format < 32u && (codec_table[i].input_formats & VCF_MASK(format)) != 0;
 	return FALSE;
 }
 
@@ -98,10 +118,11 @@ LONG codec_query(ULONG index, struct VCCodecInfo *info)
 	row.MaxWidth = 1920;
 	row.MaxHeight = 1080;
 	row.MaxLevel = codec_table[index].max_level;
-	row.Formats = codec_table[index].formats;
+	row.OutputFormats = codec_table[index].output_formats;
 	strlcpy((char *)row.Backend, LIBRARY_NAME, sizeof(row.Backend));
 	row.Priority = VCB_PRIORITY_HARDWARE;
 	row.Flags = codec_table[index].flags;
+	row.InputFormats = codec_table[index].input_formats;
 	ULONG size = umin(info->Size, sizeof(row));
 	memcpy(info, &row, size);
 	info->Size = size;

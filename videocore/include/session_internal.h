@@ -265,7 +265,7 @@ ULONG video_codec_encoding(ULONG codec);
 /* The encoding ril.image_decode's input takes for a VCC_* still picture's codec; 0 for none */
 ULONG image_codec_encoding(ULONG codec);
 /* A picture's layout in its buffer: planes, offsets, pitches, size; FALSE if it cannot be laid out */
-BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, struct vc_geometry *geometry);
+BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, BOOL own_rows, struct vc_geometry *geometry);
 /* Fill a video format: the encoding, the buffer's size, the visible picture, the frame rate */
 void video_format_set(struct mmal_format *format, u32 encoding, u32 width, u32 height, const struct VCRect *crop,
                       const struct VCRational *rate);

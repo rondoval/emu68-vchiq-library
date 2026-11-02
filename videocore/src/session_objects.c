@@ -497,7 +497,9 @@ LONG component_run(struct vc_session *session, struct mmal_component *component,
  * @isp_rows: without a pitch, planar pictures get rows the ISP reads (isp_row_pixels()), else the natural ones
  *
  * The format chosen is written back to the parameters, which every later
- * step reads.
+ * step reads.  NV12 into the ISP keeps its own rows, the chroma right after
+ * the picture's last, as a camera sends it; I420 keeps the VPU's multiple of
+ * 16.
  *
  * Return: 0, VCERR_UNSUPPORTED for an unknown format, VCERR_BADPARAM for no
  * size or a pitch too small.
@@ -513,7 +515,7 @@ LONG input_resolve(struct vc_session *session, BOOL isp_rows)
 	u32 pitch = params->InputPitch;
 	if (pitch == 0 && isp_rows && format_is_planar(format))
 		pitch = ALIGN_UP(params->Width, isp_row_pixels(format));
-	if (!picture_geometry(format, params->Width, params->Height, pitch, &session->input_geometry))
+	if (!picture_geometry(format, params->Width, params->Height, pitch, isp_rows && format == VCF_NV12, &session->input_geometry))
 		return VCERR_BADPARAM;
 	params->InputFormat = format;
 	return 0;
@@ -554,7 +556,8 @@ LONG input_set_fill(struct vc_session *session)
  * @port:    the encoder's or the converter's input
  *
  * The picture's buffer, the whole picture visible, the rate; for an encoder
- * the colour space, which the ISP ignores.  The ISP reads
+ * the colour space, which the ISP ignores (it reads YUV as full-range BT.601
+ * whatever it is told).  The ISP reads
  * a 32-bit picture's byte order the other way round from how it writes it
  * (an RGBA input comes out with red and blue swapped, as does a BGRA one),
  * so its input gets the other encoding of the two.

@@ -69,7 +69,8 @@ static ULONG align32(ULONG v)
  * @pitch: bytes per luma row
  *
  * Rows of @pitch bytes; a planar picture's luma rows aligned to 32 pixels
- * and 16 rows, the chroma planes after.
+ * and 16 rows, the chroma planes after.  NV12, which only the converter
+ * reads, has its chroma right after its own rows, as a camera sends it.
  *
  * Return: the bytes the picture takes.
  */
@@ -85,7 +86,7 @@ ULONG frame_view(struct VCFrame *f, APTR data, ULONG fmt, ULONG w, ULONG h, ULON
 	f->Pitch[0] = pitch;
 	if (fmt_planar(fmt))
 	{
-		ULONG ha = (h + 15u) & ~15u;
+		ULONG ha = fmt == VCF_NV12 ? h : (h + 15u) & ~15u;
 		f->Width = pitch;
 		f->Height = ha;
 		if (fmt == VCF_NV12)

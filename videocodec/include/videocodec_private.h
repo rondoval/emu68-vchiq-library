@@ -77,7 +77,6 @@ struct vc_backend
 {
 	struct MinNode node;            /* in VideoCodecBase.backends */
 	struct Library *library;        /* the backend's base, for its VCB_* calls */
-	ULONG abi;                      /* its VCInfo.ABIVersion: VCB_Idle() from 1.4 */
 	struct VCCodecInfo *caps;       /* its codec table as it gave it (AllocVec); NULL if empty */
 	ULONG ncaps;                    /* rows in caps */
 	char name[VC_BACKEND_NAME_MAX]; /* its file name in LIBS:videocodec/ */

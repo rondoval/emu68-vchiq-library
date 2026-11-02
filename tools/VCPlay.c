@@ -156,7 +156,7 @@ static BOOL format_choose(struct player *p)
 		if (ci.Codec != VCC_H264 || ci.Kind != VCK_Decoder)
 			continue;
 		for (ULONG f = 0; f < FORMATS_NUM; f++)
-			if ((ci.Formats & VCF_MASK(formats[f].vcf)) && (p->pf == NULL || formats[f].rgb == screen_rgb))
+			if ((ci.OutputFormats & VCF_MASK(formats[f].vcf)) && (p->pf == NULL || formats[f].rgb == screen_rgb))
 				p->pf = &formats[f];
 		if (p->pf != NULL)
 			return TRUE;

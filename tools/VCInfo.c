@@ -8,7 +8,8 @@
  *                                     vcjpeg.datatype installed, whether its
  *                                     descriptor comes first for JPEGs)
  *   VCInfo CODECS                     what the codec drivers do: codec, kind,
- *                                     limits, pixel formats, and whether a
+ *                                     limits, the pixel formats it writes
+ *                                     and reads, and whether a
  *                                     session or an image call serves it
  *   VCInfo GCMD command               one gencmd command and its answer, as
  *                                     vcgencmd gives it
@@ -527,10 +528,20 @@ static int do_codecs(void)
 		Printf((CONST_STRPTR) "  %s %s: up to %ldx%ld", codec_name(ci.Codec), kind_name(ci.Kind), ci.MaxWidth, ci.MaxHeight);
 		if (ci.MaxLevel != 0)
 			Printf((CONST_STRPTR) ", level %ld.%ld", ci.MaxLevel / 10u, ci.MaxLevel % 10u);
-		Printf((CONST_STRPTR) "; formats");
-		for (ULONG f = 0; f < 32; f++)
-			if (ci.Formats & VCF_MASK(f))
-				Printf((CONST_STRPTR) " %s", format_name(f));
+		if (ci.OutputFormats != 0)
+		{
+			Printf((CONST_STRPTR) "; writes");
+			for (ULONG f = 0; f < 32; f++)
+				if (ci.OutputFormats & VCF_MASK(f))
+					Printf((CONST_STRPTR) " %s", format_name(f));
+		}
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, InputFormats) && ci.InputFormats != 0)
+		{
+			Printf((CONST_STRPTR) "; reads");
+			for (ULONG f = 0; f < 32; f++)
+				if (ci.InputFormats & VCF_MASK(f))
+					Printf((CONST_STRPTR) " %s", format_name(f));
+		}
 		Printf((CONST_STRPTR) "; %s%s%s, priority %ld\n", ci.Backend, (ci.Flags & VCCF_Session) ? ", session" : "",
 		    (ci.Flags & VCCF_Image) ? ", image call" : "", ci.Priority);
 		n++;

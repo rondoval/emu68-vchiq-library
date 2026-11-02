@@ -179,6 +179,18 @@ def _frame800(cache: Path) -> None:
            str(cache / "frame800.i420"))
 
 
+def _camera_picture(name: str, w: int, h: int, pix_fmt: str) -> None:
+    """Register a camera's uncompressed picture: frame0 scaled, in the camera's packed layout (NV12's chroma right after its rows)."""
+    @recipe(name, "frame0.i420")
+    def make(cache: Path) -> None:
+        ffmpeg(*_raw_frame0(cache), "-vf", f"scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", pix_fmt, str(cache / name))
+
+
+for _name, _w, _h, _fmt in (("frame640.yuyv", 640, 480, "yuyv422"), ("frame720.yuyv", 1280, 720, "yuyv422"),
+                            ("frame640.nv12", 640, 480, "nv12"), ("frame1080.nv12", 1920, 1080, "nv12")):
+    _camera_picture(_name, _w, _h, _fmt)
+
+
 @recipe("clip30.i420", "clip42.h264")
 def _clip30(cache: Path) -> None:
     ffmpeg(*_clip42_input(cache), "-frames:v", "30", "-f", "rawvideo", "-pix_fmt", "yuv420p", str(cache / "clip30.i420"))

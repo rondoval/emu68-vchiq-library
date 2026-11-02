@@ -281,7 +281,7 @@ static BOOL query_formats(struct play *p)
 		if (ci.Codec != VCC_H264 || ci.Kind != VCK_Decoder)
 			continue;
 		for (const struct pixel_format *pf = pixel_formats; pf->name != NULL; pf++)
-			if (ci.Formats & VCF_MASK(pf->vcf))
+			if (ci.OutputFormats & VCF_MASK(pf->vcf))
 				p->isp_formats |= pixel_format_bit(pf);
 		char names[128];
 		kv_str("backend.name", (const char *)ci.Backend);

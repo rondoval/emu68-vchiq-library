@@ -26,7 +26,9 @@
  *   TOJPEG raw WIDTH n HEIGHT n OUT jpg [FORMAT f] [QUALITY n] [BACKEND name] [MISALIGN]
  *                                      one raw picture through VC_EncodeImage()
  *   CONVERT raw WIDTH n HEIGHT n OUT pic [FORMAT f] [OUTWIDTH n] [OUTHEIGHT n] [OUTFORMAT f]
- *           [BACKEND name] [MISALIGN]  one raw picture through VC_ConvertImage()
+ *           [BACKEND name] [MISALIGN] [COUNT n]
+ *                                      one raw picture through VC_ConvertImage(), or
+ *                                      COUNT times through a converter session, timed
  *   ENCODE raw WIDTH n HEIGHT n OUT h264 [FPS n] [BITRATE n] [KEYINT n] [KEYREQ n] [FORMAT f] [OUTWIDTH n] [OUTHEIGHT n] [HOLD n] [GAPS] [ENDEMPTY] [BACKEND name]
  *                                      a raw file through an H.264 encoder session
  *   DATATYPE file [OUT pic]            a picture through datatypes.library

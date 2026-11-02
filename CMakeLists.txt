@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(emu68-vchiq VERSION 0.3)
+project(emu68-vchiq VERSION 0.4)
 # The one version of the repository: every binary takes it (project(... VERSION
 # ${CMAKE_PROJECT_VERSION}) in its directory, the tools directly), the sources have no
 # number of their own and the SFDs carry none.  Bump it here only.

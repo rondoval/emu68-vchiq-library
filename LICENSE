@@ -35,8 +35,8 @@ The MMAL message format and client logic follow Broadcom's userland MMAL
 VideoCore client (interface/mmal/vc), "BSD-3-Clause",
 Copyright (c) 2012, Broadcom Europe Ltd. All rights reserved.
 
-VCGrab's Matroska writing (tools/vcgrab/mkv.c) comes from libvpx's libmkv and
-webmenc.c:
+VCGrab's Matroska writing (the tools/vcgrab/mkv submodule, mkv-writer) comes
+from libvpx's libmkv and webmenc.c:
 
 Copyright (c) 2010, The WebM Project authors. All rights reserved.
 

@@ -661,7 +661,7 @@ The component is **BSD-3-Clause**.
   `interface/mmal/*.h`, `interface/vmcs_host/` (gencmd, audio).
 
 * libvpx's libmkv and `webmenc.c` (BSD-3-Clause, the WebM Project), for the
-  EBML writing and the cluster and cue layout of `tools/vcgrab/mkv.c`.
+  EBML writing and the cluster and cue layout of the `tools/vcgrab/mkv` submodule.
 
 The sources for the hardware facts are in
 [firmware-facts.md](firmware-facts.md).

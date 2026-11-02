@@ -14,7 +14,7 @@
  * is a pause.  Times come from the ticks' schedule, so a drop or a pause is a
  * gap in the file and the rest stays regular.
  *
- *   tick --> the screen, sent --> ISP ==tunnel==> encoder --> packets --> mkv.c --> the file
+ *   tick --> the screen, sent --> ISP ==tunnel==> encoder --> packets --> mkv --> the file
  *            the screen, back <--+                            a bounded write a pass
  *
  * The session tells the ISP's colours to the stream by itself: full-range
@@ -204,7 +204,9 @@ static BOOL file_open(struct record *r)
 		grab_fault(r->params->file);
 		return FALSE;
 	}
-	mkv_open(&r->mkv, &file_io, r->output_width, r->output_height, r->params->fps, r->mkv_memory, MKV_MEMORY);
+	const struct mkv_track track = {
+		.codec = MKV_H264, .width = r->output_width, .height = r->output_height, .fps = r->params->fps, .app = "VCGrab"};
+	mkv_open(&r->mkv, &file_io, &track, r->mkv_memory, MKV_MEMORY);
 	return TRUE;
 }
 

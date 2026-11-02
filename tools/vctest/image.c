@@ -4,7 +4,8 @@
  * header first, by VC_GetImageInfo()) with VC_DecodeImage() into a picture
  * (RGB24 as a PPM, else raw), scaled when a size is given; TOJPEG encodes a
  * raw picture with VC_EncodeImage(); CONVERT scales and converts one with
- * VC_ConvertImage().
+ * VC_ConvertImage(), or with COUNT sends it that many times through a
+ * converter session and times the pictures.
  */
 #ifdef __INTELLISENSE__
 #include <clib/exec_protos.h>
@@ -29,9 +30,13 @@
 #include "commands.h"
 #include "picture.h"
 
+#define CONVERT_INPUTS 3      /* copies of the picture a converter session cycles through, so the VPU always has one */
+#define CONVERT_IDLE_MS 5000u /* a converter session with nothing back this long has stalled */
+
 const char image_template[] = "FILE/A,OUT/A,OUTWIDTH/N,OUTHEIGHT/N,OUTFORMAT/K,ENCODING/K,BACKEND/K,MISALIGN/S";
 const char tojpeg_template[] = "FILE/A,WIDTH/N/A,HEIGHT/N/A,OUT/A,FORMAT/K,QUALITY/N,BACKEND/K,MISALIGN/S";
-const char convert_template[] = "FILE/A,WIDTH/N/A,HEIGHT/N/A,OUT/A,FORMAT/K,OUTWIDTH/N,OUTHEIGHT/N,OUTFORMAT/K,BACKEND/K,MISALIGN/S";
+const char convert_template[] =
+    "FILE/A,WIDTH/N/A,HEIGHT/N/A,OUT/A,FORMAT/K,OUTWIDTH/N,OUTHEIGHT/N,OUTFORMAT/K,BACKEND/K,MISALIGN/S,COUNT/N";
 
 enum
 {
@@ -68,7 +73,19 @@ enum
 	CNV_OUTHEIGHT,
 	CNV_OUTFORMAT,
 	CNV_BACKEND,
-	CNV_MISALIGN
+	CNV_MISALIGN,
+	CNV_COUNT
+};
+
+/* A converter session's run: COUNT pictures out of the copies of one */
+struct convert_run
+{
+	struct tool *t;
+	struct VCSession *s;
+	struct VCFrame *inputs[CONVERT_INPUTS];
+	struct VCFrame *last; /* the newest picture out, held for the file */
+	ULONG count, sent, pictures;
+	BOOL failed;
 };
 
 /**
@@ -286,7 +303,160 @@ out:
 }
 
 /**
- * do_convert() - CONVERT: one raw picture scaled and converted by VC_ConvertImage().
+ * convert_send() - Send a copy of the picture, while pictures are still owed.
+ * @r: the run
+ * @f: the copy, in hand
+ */
+static void convert_send(struct convert_run *r, struct VCFrame *f)
+{
+	if (r->failed || r->sent == r->count)
+		return;
+	f->Pts = (VCTime)r->sent * 33333;
+	f->Flags = 0;
+	LONG err = VC_SendFrame(r->s, f);
+	if (err != 0)
+	{
+		kv_num("error", err);
+		kv_str("fail", "VC_SendFrame failed");
+		r->failed = TRUE;
+		return;
+	}
+	r->sent++;
+}
+
+/**
+ * convert_loop() - Keep every copy at the VPU until COUNT pictures are back, the newest held.
+ * @r: the run, its copies imported
+ */
+static void convert_loop(struct convert_run *r)
+{
+	for (ULONG i = 0; i < CONVERT_INPUTS; i++)
+		convert_send(r, r->inputs[i]);
+	while (!r->failed && r->pictures < r->count)
+	{
+		struct VCItem it;
+		while (!r->failed && VC_Poll(r->s, &it))
+		{
+			switch (it.Type)
+			{
+			case VCIT_FrameReturned:
+				convert_send(r, it.u.Frame);
+				break;
+			case VCIT_Frame:
+				if (r->last != NULL)
+					VC_ReleaseFrame(r->s, r->last);
+				r->last = it.u.Frame;
+				r->pictures++;
+				break;
+			case VCIT_Event:
+				if (it.u.Event.Event == VCEV_Error)
+				{
+					kv_num("session.error", it.u.Event.Status);
+					kv_str("fail", "the session reported an error");
+					r->failed = TRUE;
+				}
+				break;
+			default:
+				break;
+			}
+		}
+		if (r->failed || r->pictures == r->count)
+			return;
+		if ((waiter_wait(&r->t->waiter, 0, CONVERT_IDLE_MS) & waiter_sigmask(&r->t->waiter)) == 0)
+		{
+			kv_str("fail", "no picture came back (or Ctrl-C)");
+			r->failed = TRUE;
+		}
+	}
+}
+
+/**
+ * convert_session() - COUNT: the picture through a converter session, timed; the last one out to a file.
+ * @t:       the tool
+ * @in:      the picture, in DMA-reachable memory
+ * @size:    its bytes
+ * @ofmt:    the output's VCF_*
+ * @ow:      the output's width
+ * @oh:      the output's height
+ * @count:   the pictures to make
+ * @outname: the file for the last
+ *
+ * The picture is imported in CONVERT_INPUTS copies, which go round, so the
+ * VPU never waits for the 68k.
+ *
+ * Return: RETURN_OK; RETURN_FAIL for a refused session or a failure; RETURN_ERROR for memory or the file.
+ */
+static int convert_session(struct tool *t, const struct VCFrame *in, ULONG size, ULONG ofmt, ULONG ow, ULONG oh, ULONG count, const char *outname)
+{
+	struct convert_run r = {.t = t, .count = count};
+	APTR blocks[CONVERT_INPUTS] = {NULL};
+	struct VCFrame copies[CONVERT_INPUTS];
+	ULONG w = (ULONG)in->Crop.Width, h = (ULONG)in->Crop.Height, bytes;
+	int rc = RETURN_ERROR;
+	for (ULONG i = 0; i < CONVERT_INPUTS; i++)
+	{
+		blocks[i] = picture_alloc(&copies[i], in->Format, w, h, t->misalign, &bytes);
+		if (blocks[i] == NULL)
+		{
+			kv_str("fail", "no memory");
+			goto out;
+		}
+		CopyMem(in->Data, copies[i].Data, size);
+	}
+	LONG err = 0;
+	u32 t0 = get_time();
+	r.s = VC_OpenSessionTags(VCA_Codec, VCC_Raw, VCA_Kind, VCK_Converter, VCA_Width, w, VCA_Height, h, VCA_InputFormat, in->Format,
+	                         VCA_InputPitch, in->Pitch[0], VCA_OutputFormat, ofmt, VCA_OutputWidth, ow,
+	                         VCA_OutputHeight, oh, VCA_SigTask, (ULONG)t->waiter.task, VCA_SigMask, waiter_sigmask(&t->waiter),
+	                         BACKEND_TAG(t), VCA_ErrorPtr, (ULONG)&err, TAG_DONE);
+	kv_str("convert.session", r.s != NULL ? "open" : "refused");
+	kv_unum("convert.open_us", get_time() - t0);
+	if (r.s == NULL)
+	{
+		kv_num("error", err);
+		kv_str("fail", "the session was refused");
+		rc = RETURN_FAIL;
+		goto out;
+	}
+	for (ULONG i = 0; i < CONVERT_INPUTS; i++)
+	{
+		r.inputs[i] = VC_ImportFrame(r.s, VCS_Input, copies[i].Data);
+		if (r.inputs[i] == NULL)
+		{
+			kv_str("fail", "VC_ImportFrame refused the picture");
+			r.failed = TRUE;
+			break;
+		}
+	}
+	t0 = get_time();
+	if (!r.failed)
+		convert_loop(&r);
+	u32 took = get_time() - t0;
+	kv_unum("convert.pictures", r.pictures);
+	kv_unum("convert.us", took);
+	kv_unum("convert.per_picture_us", r.pictures != 0 ? took / r.pictures : 0);
+	kv_fixed1("convert.fps", r.pictures * 1000u, took / 1000u);
+	if (r.failed)
+		rc = RETURN_FAIL;
+	else if (r.last == NULL || !frame_to_file(outname, r.last))
+		kv_str("fail", "the picture could not be written");
+	else
+	{
+		kv_str("convert.written", outname);
+		rc = RETURN_OK;
+	}
+	if (r.last != NULL)
+		VC_ReleaseFrame(r.s, r.last);
+	VC_CloseSession(r.s);
+out:
+	for (ULONG i = 0; i < CONVERT_INPUTS; i++)
+		if (blocks[i] != NULL)
+			FreeVec(blocks[i]);
+	return rc;
+}
+
+/**
+ * do_convert() - CONVERT: one raw picture scaled and converted by VC_ConvertImage(), or by a converter session (COUNT).
  * @t:    the tool
  * @args: convert_template's
  *
@@ -296,7 +466,7 @@ int do_convert(struct tool *t, LONG *args)
 {
 	const char *raw = arg_str(args, CNV_FILE), *outname = arg_str(args, CNV_OUT);
 	const char *fmt_name = arg_str(args, CNV_FORMAT), *ofmt_name = arg_str(args, CNV_OUTFORMAT);
-	ULONG w = arg_num(args, CNV_WIDTH, 0), h = arg_num(args, CNV_HEIGHT, 0);
+	ULONG w = arg_num(args, CNV_WIDTH, 0), h = arg_num(args, CNV_HEIGHT, 0), count = arg_num(args, CNV_COUNT, 0);
 	t->backend = arg_str(args, CNV_BACKEND);
 	t->misalign = args[CNV_MISALIGN] != 0;
 	ULONG fmt = fmt_name != NULL ? format_of_name(fmt_name) : VCF_I420;
@@ -322,9 +492,9 @@ int do_convert(struct tool *t, LONG *args)
 	struct VCFrame in, out;
 	ULONG isize, osize;
 	APTR src = picture_alloc(&in, fmt, w, h, t->misalign, &isize);
-	APTR dest = picture_alloc(&out, ofmt, ow, oh, t->misalign, &osize);
+	APTR dest = count == 0 ? picture_alloc(&out, ofmt, ow, oh, t->misalign, &osize) : NULL;
 	UBYTE *tmp = AllocVec(w * h * 4u, MEMF_PUBLIC);
-	if (src == NULL || dest == NULL || tmp == NULL)
+	if (src == NULL || (count == 0 && dest == NULL) || tmp == NULL)
 	{
 		kv_str("fail", "no memory");
 		goto out;
@@ -337,6 +507,11 @@ int do_convert(struct tool *t, LONG *args)
 	kv_str("convert.out.format", format_name(ofmt));
 	kv_unum("convert.out.width", ow);
 	kv_unum("convert.out.height", oh);
+	if (count != 0)
+	{
+		rc = convert_session(t, &in, isize, ofmt, ow, oh, count, outname);
+		goto out;
+	}
 	kv_unum("convert.out.pitch", out.Pitch[0]);
 	LONG err = 0;
 	u32 t0 = get_time();

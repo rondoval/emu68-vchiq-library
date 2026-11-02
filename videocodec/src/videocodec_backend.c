@@ -79,30 +79,6 @@ static struct vc_backend *backend_by_name(struct VideoCodecBase *base, const cha
 	return NULL;
 }
 
-/**
- * row_priority() - The priority of one codec row.
- * @row: a row as its backend gave it
- *
- * Return: the row's Priority, or VCB_PRIORITY_SOFTWARE for a row of an ABI
- * 1.0 backend, which stops short of the field.
- */
-static LONG row_priority(const struct VCCodecInfo *row)
-{
-	return VC_HAS_FIELD(row->Size, struct VCCodecInfo, Priority) ? row->Priority : VCB_PRIORITY_SOFTWARE;
-}
-
-/**
- * row_flags() - What one codec row serves.
- * @row: a row as its backend gave it
- *
- * Return: the row's VCCF_* Flags, or VCCF_Session for a row of a backend
- * before ABI 1.3, which stops short of the field.
- */
-static ULONG row_flags(const struct VCCodecInfo *row)
-{
-	return VC_HAS_FIELD(row->Size, struct VCCodecInfo, Flags) ? row->Flags : VCCF_Session;
-}
-
 /* ---- one backend ----------------------------------------------------------------- */
 
 /**
@@ -111,9 +87,8 @@ static ULONG row_flags(const struct VCCodecInfo *row)
  * @backend: the backend; @backend->library and @backend->name set
  * @rows:    the rows it has, as VCB_GetInfo() reported (VCInfo.Codecs)
  *
- * Rows are kept as the backend gave them, Size included (row_priority()
- * reads it); the backend name is written when a row is handed out, by
- * VC_QueryCodec().  At most VC_CAPS_MAX rows are read; a backend that
+ * Rows are kept as the backend gave them; the backend name is written when
+ * a row is handed out, by VC_QueryCodec().  At most VC_CAPS_MAX rows are read; a backend that
  * answers fewer than it reported keeps the rows it gave (@backend->ncaps
  * counts them).
  *
@@ -223,7 +198,6 @@ static BOOL backend_handshake(struct vc_backend *backend, ULONG *rows)
 		return FALSE;
 	}
 	*rows = info.Codecs;
-	backend->abi = info.ABIVersion;
 	return TRUE;
 }
 
@@ -357,7 +331,7 @@ void vc_backends_free(struct VideoCodecBase *base)
  * vc_backends_idle() - The last opener is gone: every backend lets go of what it keeps between calls.
  * @base: the library base, in the closing task (it may wait)
  *
- * VCB_Idle() of each backend of ABI 1.4 and later; older ones keep theirs.
+ * VCB_Idle() of each backend.
  */
 void vc_backends_idle(struct VideoCodecBase *base)
 {
@@ -365,12 +339,8 @@ void vc_backends_idle(struct VideoCodecBase *base)
 	ObtainSemaphore(&base->lock);
 	for (struct MinNode *node = base->backends.mlh_Head; node->mln_Succ != NULL; node = node->mln_Succ)
 	{
-		struct vc_backend *backend = BE_FROM_NODE(node);
-		if ((backend->abi & 0xffffu) >= 4u) /* the major is ours (the handshake); VCB_Idle() came with minor 4 */
-		{
-			struct Library *VCBackendBase = backend->library;
-			VCB_Idle();
-		}
+		struct Library *VCBackendBase = BE_FROM_NODE(node)->library;
+		VCB_Idle();
 	}
 	ReleaseSemaphore(&base->lock);
 }
@@ -422,12 +392,12 @@ struct vc_backend *vc_backend_for(struct VideoCodecBase *base, ULONG codec, ULON
 		for (ULONG i = 0; i < backend->ncaps; i++)
 		{
 			const struct VCCodecInfo *row = &backend->caps[i];
-			if (row->Codec != codec || row->Kind != kind || (row_flags(row) & use) == 0)
+			if (row->Codec != codec || row->Kind != kind || (row->Flags & use) == 0)
 				continue;
-			if (best == NULL || row_priority(row) > best_priority)
+			if (best == NULL || row->Priority > best_priority)
 			{
 				best = backend;
-				best_priority = row_priority(row);
+				best_priority = row->Priority;
 			}
 		}
 	}
@@ -443,11 +413,8 @@ struct vc_backend *vc_backend_for(struct VideoCodecBase *base, ULONG codec, ULON
  * @base:  the library base (A6)
  *
  * Copies the row into @info up to the smaller of the caller's Size and the
- * library's, then writes what the frontend knows better than the row:
- * Backend (the backend's file name, for VCA_Backend), Priority (as
- * row_priority() reads it, so a row of a 1.0 backend says software) and
- * Flags (as row_flags() reads it), each only if the caller's structure has
- * it.  Size ends up as what was copied.
+ * library's, then the backend's file name into Backend (for VCA_Backend),
+ * if the caller's structure has it.  Size ends up as what was copied.
  *
  * Return: 0, or VCERR_BADPARAM past the last row or for a bad @info.
  */
@@ -470,10 +437,6 @@ LONG VC_QueryCodec(ULONG index asm("d0"), struct VCCodecInfo *info asm("a0"), st
 			info->Size = size;
 			if (VC_HAS_FIELD(size, struct VCCodecInfo, Backend))
 				strlcpy((char *)info->Backend, backend->name, sizeof(info->Backend));
-			if (VC_HAS_FIELD(size, struct VCCodecInfo, Priority))
-				info->Priority = row_priority(&backend->caps[index]);
-			if (VC_HAS_FIELD(size, struct VCCodecInfo, Flags))
-				info->Flags = row_flags(&backend->caps[index]);
 			rc = 0;
 		}
 		else

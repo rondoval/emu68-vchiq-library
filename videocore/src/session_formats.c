@@ -157,16 +157,18 @@ ULONG image_codec_encoding(ULONG codec)
  * @width:    pixels per row of the buffer (not of the visible picture)
  * @height:   rows
  * @pitch:    bytes per row, 0 for the natural one
+ * @own_rows: a planar picture's chroma follows its own rows, not the VPU's
  * @geometry: where the layout goes
  *
  * Planar pictures take the VPU's alignment: rows of a multiple of 32 pixels,
- * a multiple of 16 of them.  A packed picture's pitch is whole pixels: an
- * MMAL format has no stride, the VPU works it out from the width.
+ * a multiple of 16 of them unless @own_rows.  A packed picture's pitch is
+ * whole pixels: an MMAL format has no stride, the VPU works it out from the
+ * width.
  *
  * Return: TRUE, FALSE for an unknown format, an empty picture, or a pitch too
  * small for the width or not of whole pixels.
  */
-BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, struct vc_geometry *geometry)
+BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, BOOL own_rows, struct vc_geometry *geometry)
 {
 	u32 bytes_per_pixel = format_bytes_per_pixel(format);
 	if (bytes_per_pixel == 0 || width == 0 || height == 0)
@@ -174,7 +176,7 @@ BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, struct vc_
 	memset(geometry, 0, sizeof(*geometry));
 	if (format_is_planar(format))
 	{
-		u32 rows = ALIGN_UP(height, 16u);
+		u32 rows = own_rows ? height : ALIGN_UP(height, 16u);
 		u32 row_bytes = pitch != 0 ? pitch : ALIGN_UP(width, 32u);
 		if (row_bytes < width || (row_bytes & 1u) != 0)
 			return FALSE;

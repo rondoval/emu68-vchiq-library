@@ -102,6 +102,21 @@ be done. Add a fact here when a measurement finds one.
 * **RGB to YUV in the ISP.** Always BT.601 full range: `color_space` on the
   input port, the output port or both changes nothing (the bars of
   `tests/test_vcgrab.py`).
+* **YUV to RGB in the ISP.** YUYV and NV12 input work, and are read as BT.601
+  full range, whatever `color_space` the input port has: none, BT601, BT709
+  and JPEG_JFIF give byte-identical pictures (firmware of 14 May 2025, CM4). A
+  camera's video-range picture therefore keeps its blacks at 16 and whites at
+  235. `MMAL_PARAMETER_CUSTOM_CCM` (camera group + 0x58) is taken on the input
+  port, but any enabled matrix, the identity included, turns YUV input into one
+  flat colour (255, 121, 255); disabled, the picture is as without it. So
+  there is no way to expand the range on the VPU.
+* **NV12 input rows.** The ISP takes NV12 at its own height, the UV rows right
+  after the picture's last (1920x1080 packed, 3110400 bytes), no 16-row padding
+  needed.
+* **A converter session's rate.** YUYV to BGRA32 through `ril.isp`, the input
+  imported: 785 pictures a second at 640x480 and 454 at 1280x720 (CM4). One
+  image call costs about 40 ms at either size: the session is the way to
+  convert a stream.
 * **The ISP reads the screen.** VRAM imported as an input works, live, and rows
   of 1080 packed lines are taken without padding, all five formats.
 * **The encoder's colour space.** `ril.video_encode` writes the `color_space` of

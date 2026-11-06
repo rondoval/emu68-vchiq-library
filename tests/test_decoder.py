@@ -58,6 +58,7 @@ def test_codec_tag(device, material):
     r = decode(device, material, "clip42.h264", "FRAMED FRAMES 150 TAG avc1")
     assert r.passed, r.kv.get("fail")
     assert r.kv.get("decode.tag") == "avc1"
+    assert r.num("ref.compared") == 150 and r.num("ref.mismatches") == 0
 
 
 @pytest.mark.parametrize("extra", [pytest.param("", id="native"), pytest.param("OUTFORMAT RGBA32", id="through-isp")])
@@ -68,7 +69,6 @@ def test_resignal(device, material, extra):
     assert r.passed, r.kv.get("fail")
     assert r.num("resignal.at") == 30 and r.num("resignal.rc") == 0
     assert r.num("decode.frames") == 300
-    assert r.num("ref.compared") == 150 and r.num("ref.mismatches") == 0
 
 
 def test_unknown_backend_refused(device, material):

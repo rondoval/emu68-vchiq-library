@@ -515,7 +515,7 @@ LONG input_resolve(struct vc_session *session, BOOL isp_rows)
 	u32 pitch = params->InputPitch;
 	if (pitch == 0 && isp_rows && format_is_planar(format))
 		pitch = ALIGN_UP(params->Width, isp_row_pixels(format));
-	if (!picture_geometry(format, params->Width, params->Height, pitch, isp_rows && format == VCF_NV12, &session->input_geometry))
+	if (!picture_geometry(format, params->Width, params->Height, pitch, &session->input_geometry))
 		return VCERR_BADPARAM;
 	params->InputFormat = format;
 	return 0;
@@ -578,24 +578,32 @@ LONG input_format_commit(struct vc_session *session, struct mmal_port *port)
 		encoding = encoding == MMAL_ENCODING_RGBA ? MMAL_ENCODING_BGRA : MMAL_ENCODING_RGBA;
 
 	if (!mmal_port_supports(session->base, port, encoding))
+	{
+		Kprintf("[videocore] %s input does not list %08lx among its %ld encodings\n", port->component->name, encoding,
+		        (ULONG)port->encoding_count);
 		return VCERR_UNSUPPORTED;
+	}
 
 	struct VCRect whole = rect_whole(params->Width, params->Height);
 	video_format_set(&port->format, encoding, geometry->width, geometry->height, &whole, &params->FrameRate);
+	u32 width = geometry->width;
 	if (session->kind == SESSION_ENCODER)
 		port->format.es.video.color_space = color_space_mmal(params->ColorSpace); /* the encoder writes it into the SPS */
 
+	/* The column format goes as its width and rows like any picture: the ISP refuses the column
+	 * stride as the width (the COL_FMTS_WIDTH_IS_COL_STRIDE flag, EINVAL) and implies the stride
+	 * from the rows, 16-aligned, as picture_geometry() lays it out (docs/firmware-facts.md). */
 	LONG error = mmal_port_commit(session->base, port);
 	const struct mmal_format *taken = &port->format; /* as the VPU read it back */
 	if (error != 0)
-		Kprintf("[videocore] commit input format %ld (%ldx%ld) on %s: %ld\n", params->InputFormat, geometry->width, geometry->height,
+		Kprintf("[videocore] commit input format %ld (%ldx%ld) on %s: %ld\n", params->InputFormat, width, geometry->height,
 		        port->component->name, error);
-	else if (taken->es.video.width != geometry->width || taken->es.video.height != geometry->height)
+	else if (taken->es.video.width != width || taken->es.video.height != geometry->height)
 	{
 		Kprintf("[videocore] %s input read back as %ldx%ld, the pictures are %ldx%ld\n", port->component->name, taken->es.video.width,
-		        taken->es.video.height, geometry->width, geometry->height);
+		        taken->es.video.height, width, geometry->height);
 		/* the VPU's stride follows its width; more rows only make the buffer bigger, which the set check sees */
-		if (taken->es.video.width != geometry->width)
+		if (taken->es.video.width != width)
 			error = VCERR_BADPARAM;
 	}
 	return error;

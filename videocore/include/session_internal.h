@@ -255,6 +255,9 @@ LONG ports_flush(struct vc_session *session, struct mmal_port *const *ports, u32
 /* session_formats.c: pixel formats, picture layouts, rectangles, MMAL <-> client */
 /* Whether a VCF_* format keeps luma and chroma in planes of their own */
 BOOL format_is_planar(ULONG format);
+#define COLUMN_BYTES 128u /* a column format's column: bytes per row of it */
+#define COLUMN10_SAMPLES 96u /* the 10-bit column format's samples per 128-byte column row: three in 32 bits */
+BOOL format_is_column(ULONG format);
 /* Bytes per pixel of a VCF_* format's first plane, 1 for a planar one; 0 for an unknown format */
 u32 format_bytes_per_pixel(ULONG format);
 /* The MMAL encoding of a VCF_* pixel format; 0 for none */
@@ -265,7 +268,7 @@ ULONG video_codec_encoding(ULONG codec);
 /* The encoding ril.image_decode's input takes for a VCC_* still picture's codec; 0 for none */
 ULONG image_codec_encoding(ULONG codec);
 /* A picture's layout in its buffer: planes, offsets, pitches, size; FALSE if it cannot be laid out */
-BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, BOOL own_rows, struct vc_geometry *geometry);
+BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, struct vc_geometry *geometry);
 /* Fill a video format: the encoding, the buffer's size, the visible picture, the frame rate */
 void video_format_set(struct mmal_format *format, u32 encoding, u32 width, u32 height, const struct VCRect *crop,
                       const struct VCRational *rate);

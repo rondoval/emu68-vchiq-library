@@ -677,6 +677,21 @@ struct VCFrame *session_import_frame(struct vc_session *session, ULONG side, APT
 	return &object->pub.frame;
 }
 
+/**
+ * session_output_frame() - One of the session's output frames, by index (VCB_OutputFrame()).
+ * @session: the session
+ * @index:   0 upward
+ *
+ * Return: the frame, NULL past the last or for a packet side.
+ */
+struct VCFrame *session_output_frame(struct vc_session *session, ULONG index)
+{
+	struct vc_set *set = &session->output_set;
+	if (index >= set->count || !set->objects[index]->is_frame)
+		return NULL;
+	return &set->objects[index]->pub.frame;
+}
+
 /* ---- sends and releases ----------------------------------------------------------------- */
 
 /**

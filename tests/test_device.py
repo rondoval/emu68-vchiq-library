@@ -5,7 +5,10 @@ import pytest
 from harness.tools import assert_nothing_left, status, vctest
 
 STILL_FORMATS = "I420,RGB16,RGB24,BGR24,BGRA32,RGBA32"
-CONVERTER_READS = "I420,NV12,RGB16,RGB24,BGR24,BGRA32,RGBA32,YUYV"  # the ISP's own and a camera's
+# the ISP's own, a camera's, the column format and the formats tests/test_formats.py proves
+CONVERTER_READS = "I420,NV12,RGB16,RGB24,BGR24,BGRA32,RGBA32,YUYV,UYVY,NV12_COL128,NV21,I422,YVYU,VYUY,RGBX32,BGRX32"
+CONVERTER_WRITES = "I420,YV12,NV12,RGB16,RGB24,BGR24,BGRA32,RGBA32,YUYV,UYVY,NV21,I422,YVYU,VYUY,RGBX32,BGRX32"
+VIDEOCORE_ROWS = 11
 
 
 @pytest.mark.smoke
@@ -23,8 +26,8 @@ def test_codec_table(device):
     """VCTest CODECS: eleven rows; the streams on sessions, the stills on image calls, every still decoder in six formats, the converter reading a camera's too."""
     r = vctest(device, "CODECS", 30)
     assert r.passed, r.kv.get("fail")
-    rows = r.group("codec")
-    assert len(rows) == 11, f"{len(rows)} codec rows"
+    rows = [c for c in r.group("codec") if c["backend"] == "videocore.codec"]  # other codec drivers add rows of their own
+    assert len(rows) == VIDEOCORE_ROWS, f"{len(rows)} codec rows"
     by_name = {(c["name"], c["kind"]): c for c in rows}
     for name in ("H264", "MJPEG"):
         assert by_name[(name, "decoder")]["session"] == "yes", f"{name} decoder: no sessions"
@@ -39,6 +42,7 @@ def test_codec_table(device):
     converter = by_name[("raw", "converter")]
     assert converter["image"] == "yes"
     assert converter.get("input_formats") == CONVERTER_READS, f"the converter reads {converter.get('input_formats')}"
+    assert converter.get("output_formats") == CONVERTER_WRITES, f"the converter writes {converter.get('output_formats')}"
     for name, reads in (("H264", STILL_FORMATS), ("JPEG", "I420,RGBA32")):
         encoder = by_name[(name, "encoder")]
         assert encoder.get("input_formats") == reads and "output_formats" not in encoder, f"{name} encoder: {encoder}"

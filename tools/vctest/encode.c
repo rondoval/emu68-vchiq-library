@@ -315,7 +315,7 @@ int do_encode(struct tool *t, LONG *args)
 		kv_str("fail", "no such format");
 		return RETURN_FAIL;
 	}
-	ULONG picture_bytes = fmt_planar(format) ? e.w * e.h * 3u / 2u : e.w * e.h * fmt_bpp(format);
+	ULONG picture_bytes = raw_bytes(format, e.w, e.h);
 	e.file = Open((CONST_STRPTR)raw, MODE_OLDFILE);
 	if (e.file == 0)
 	{

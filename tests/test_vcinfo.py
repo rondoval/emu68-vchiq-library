@@ -6,10 +6,13 @@ import pytest
 
 from harness.results import expect
 
-CODEC_ROWS = (r"^11 codecs$", r"level 4\.0", r"H264 decoder: .*, session, priority", r"MJPEG decoder: .*, session, priority",
+VIDEOCORE_ROWS = 11
+CODEC_ROWS = (r"^\d+ codecs$", r"level 4\.0", r"H264 decoder: .*, session, priority", r"MJPEG decoder: .*, session, priority",
               r"H264 encoder: .*; reads I420 RGB16 RGB24 BGR24 BGRA32 RGBA32; [^,]+, session, priority",
               r"JPEG encoder: .*; reads I420 RGBA32; [^,]+, session, image call,",
-              r"raw converter: .*; reads I420 NV12 RGB16 RGB24 BGR24 BGRA32 RGBA32 YUYV; [^,]+, session, image call,",
+              r"raw converter: .*; writes I420 YV12 NV12 RGB16 RGB24 BGR24 BGRA32 RGBA32 YUYV UYVY NV21 I422 YVYU VYUY RGBX32 BGRX32; "
+              r"reads I420 NV12 RGB16 RGB24 BGR24 BGRA32 RGBA32 YUYV UYVY NV12_COL128 NV21 I422 YVYU VYUY RGBX32 BGRX32; "
+              r"[^,]+, session, image call,",
               *(rf"{c} decoder: .*writes I420 RGB16 RGB24 BGR24 BGRA32 RGBA32; [^,]+, image call,"
                 for c in ("JPEG", "PNG", "GIF", "BMP", "TGA", "PPM")))
 
@@ -54,8 +57,20 @@ def test_components(device, artifacts, record_property):
 
 
 def test_codec_table(device):
-    """VCInfo CODECS: eleven rows, each saying what serves it: sessions for the streams, image calls for the stills."""
+    """VCInfo CODECS: videocore.codec's eleven rows, each saying what serves it: sessions for the streams, image calls for the stills."""
     rc, text = device.run_text("VCInfo", "CODECS")
     expect(text, r"^PASS$", "CODECS")
     for regex in CODEC_ROWS:
         expect(text, regex, "the codec rows")
+    rows = len(re.findall(r"; videocore\.codec, ", text))  # other codec drivers may add rows of their own (rpivid.codec)
+    assert rows == VIDEOCORE_ROWS, f"videocore.codec has {rows} rows, not {VIDEOCORE_ROWS}"
+
+
+def test_codec_of_tag(device):
+    """VC_CodecOfTag(): the codec of the FourCCs players meet, in either case, and none for one it does not know."""
+    want = {"XVID": "MPEG4", "xvid": "MPEG4", "hvc1": "H265", "avc1": "H264", "DIV3": "MSMPEG4", "WVC1": "VC1",
+            "av01": "AV1", "vp09": "VP9", "mp4v": "MPEG4", "MJPG": "MJPEG", "rle ": "QTRLE", "zzzz": "?"}
+    r = device.run("VCTest", "CODECS OF " + " ".join(f'"{tag}"' for tag in want))
+    assert r.passed, r.kv.get("fail")
+    got = [row["codec"] for row in r.group("of")]  # in the order given: a trailing blank does not survive the grammar
+    assert got == list(want.values()), dict(zip(want, got))

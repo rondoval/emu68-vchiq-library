@@ -330,15 +330,30 @@ static const char *const probe_components[] = {
     "ril.resize",       "ril.video_splitter", "ril.video_render", "ril.null_sink",    "ril.source",       "ril.clock",
     "ril.camera",       "ril.camera_info",    "ril.rawcam",       "ril.hvs",          "ril.audio_render", "ril.audio_capture",
     "ril.audio_decode", "video_convert",      "aggregator.pipeline:ril.image_decode:video_convert",
+    "ril.audio_mixer",  "ril.audio_processor", "ril.read_media",  "ril.write_media",  "ril.write_still",  "ril.image_read",
+    "ril.text_scheduler", "ril.video_scheduler", "ril.egl_render", "ril.camplus",   "ril.transition",   "ril.video_capture",
 };
 
 /* The codecs COMPONENTS asks gencmd about: a name gencmd does not know just answers an error */
 static const char *const codec_queries[] = {
     "codec_enabled H264", "codec_enabled MJPG", "codec_enabled MPG2", "codec_enabled WVC1", "codec_enabled MPG4",
     "codec_enabled VP6",  "codec_enabled VP8",  "codec_enabled THRA", "codec_enabled WMV9", "codec_enabled HEVC",
+    "codec_enabled H263", "codec_enabled MP4V", "codec_enabled VP9",  "codec_enabled AV1",  "codec_enabled AVS",
+    "codec_enabled PCM",  "codec_enabled AGIF", "codec_enabled MVC0", "codec_enabled DTS",  "codec_enabled DDP",
 };
 
-#define PROBE_ENCODINGS 48u /* encodings read per port */
+#define PROBE_ENCODINGS MMAL_WIRE_PARAM_WORDS /* encodings read per port: as many as one parameter carries */
+
+/* The pixel encodings tried on a port that lists none (the ISP's input): each is committed, the answer printed */
+static const ULONG try_encodings[] = {
+    MMAL_ENCODING_I420,  MMAL_ENCODING_YV12,     MMAL_ENCODING_I422,  MMAL_ENCODING_NV12,  MMAL_ENCODING_NV21,
+    MMAL_ENCODING_YUYV,  MMAL_ENCODING_YVYU,     MMAL_ENCODING_UYVY,  MMAL_ENCODING_VYUY,  MMAL_ENCODING_RGB16,
+    MMAL_ENCODING_BGR16, MMAL_ENCODING_RGB24,    MMAL_ENCODING_BGR24, MMAL_ENCODING_RGBA,  MMAL_ENCODING_BGRA,
+    MMAL_ENCODING_ARGB,  MMAL_ENCODING_ABGR,     MMAL_ENCODING_RGB32, MMAL_ENCODING_BGR32, MMAL_ENCODING_YUVUV128,
+    MMAL_ENCODING_YUV10_COL, MMAL_ENCODING_I420_SLICE, MMAL_ENCODING_I422_SLICE, MMAL_ENCODING_OPAQUE,
+};
+#define TRY_WIDTH 128u /* the picture a tried encoding is committed with */
+#define TRY_HEIGHT 64u
 
 /**
  * mmal_call() - One MMAL request on the open "mmal" service, and its reply.
@@ -397,6 +412,52 @@ static void fourcc_text(ULONG fourcc, char text[5])
 }
 
 /**
+ * try_port() - Commit each pixel encoding of try_encodings[] to a port, and print which it takes.
+ * @component: the component's handle, wire order
+ * @type:      MMAL_PORT_TYPE_INPUT or MMAL_PORT_TYPE_OUTPUT
+ * @index:     the port's index within its type
+ * @info:      the port as it is, whose format each commit changes
+ *
+ * For a port whose list is missing: a format commit is what a session does
+ * first, so a refusal here is a refusal there.  Taking a format is not
+ * converting it right; the tests check that.
+ */
+static void try_port(__le32 component, ULONG type, ULONG index, const struct mmal_msg_port_info *info)
+{
+	char text[5];
+	Printf((CONST_STRPTR) "    commits");
+	for (ULONG i = 0; i < ARRAY_SIZE(try_encodings); i++)
+	{
+		struct mmal_msg_port_info_set set = {0};
+		struct mmal_msg_port_info reply;
+		set.component_handle = component;
+		set.port_type = VCHIQ_LE32(type);
+		set.index = VCHIQ_LE32(index);
+		set.port = info->port;
+		set.format = info->format;
+		set.es = info->es;
+		set.format.type = VCHIQ_LE32(MMAL_ES_TYPE_VIDEO);
+		set.format.encoding = VCHIQ_LE32(try_encodings[i]);
+		set.format.extradata_size = 0;
+		/* the video member: width, height, then the crop's x, y, width and height */
+		set.es.words[0] = VCHIQ_LE32(TRY_WIDTH);
+		set.es.words[1] = VCHIQ_LE32(TRY_HEIGHT);
+		set.es.words[2] = set.es.words[3] = 0;
+		set.es.words[4] = VCHIQ_LE32(TRY_WIDTH);
+		set.es.words[5] = VCHIQ_LE32(TRY_HEIGHT);
+		ULONG got = mmal_call(&set, sizeof(set), MMAL_MSG_PORT_INFO_SET, &reply, sizeof(reply));
+		fourcc_text(try_encodings[i], text);
+		if (got < sizeof(reply.h) + sizeof(reply.status))
+			Printf((CONST_STRPTR) " %s?", text);
+		else if (reply.status == 0)
+			Printf((CONST_STRPTR) " %s", text);
+		else
+			Printf((CONST_STRPTR) " -%s", text);
+	}
+	Printf((CONST_STRPTR) "  (-: refused, ?: no reply)\n");
+}
+
+/**
  * probe_port() - Print a port: its format's encoding, its buffer needs, the encodings it takes.
  * @component: the component's handle, wire order
  * @type:      MMAL_PORT_TYPE_INPUT or MMAL_PORT_TYPE_OUTPUT
@@ -433,7 +494,9 @@ static void probe_port(__le32 component, ULONG type, ULONG index)
 	/* at least the parameter's id and size words (8 bytes) */
 	if (got < MMAL_MSG_PORT_PARAM_REPLY_FIXED + 8u || answer.status != 0)
 	{
-		Printf((CONST_STRPTR) "    encodings: none given\n");
+		Printf((CONST_STRPTR) "    encodings: none given (%s, status %ld)\n", got != 0 ? "answered" : "no reply",
+		    got != 0 ? (LONG)VCHIQ_LE32(answer.status) : -1L);
+		try_port(component, type, index, &info);
 		return;
 	}
 	/* the fourccs (4 bytes each) after the id and size words (8 bytes): as many as the size says, and as many as arrived */
@@ -525,7 +588,11 @@ static int do_codecs(void)
 		ci.Size = sizeof(ci);
 		if (VC_QueryCodec(i, &ci) != 0)
 			break;
-		Printf((CONST_STRPTR) "  %s %s: up to %ldx%ld", codec_name(ci.Codec), kind_name(ci.Kind), ci.MaxWidth, ci.MaxHeight);
+		char tag[TAG_NAME_SIZE];
+		Printf((CONST_STRPTR) "  %s", codec_name(ci.Codec));
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, Tag) && ci.Tag != 0)
+			Printf((CONST_STRPTR) " (%s)", tag_name(ci.Tag, tag));
+		Printf((CONST_STRPTR) " %s: up to %ldx%ld", kind_name(ci.Kind), ci.MaxWidth, ci.MaxHeight);
 		if (ci.MaxLevel != 0)
 			Printf((CONST_STRPTR) ", level %ld.%ld", ci.MaxLevel / 10u, ci.MaxLevel % 10u);
 		if (ci.OutputFormats != 0)

@@ -3,16 +3,24 @@
  * decode.c - DECODE: an elementary stream through a decoder session.  Every
  * I420 frame is hashed like ffmpeg's framemd5 and compared with REF; an
  * OUTFORMAT other than I420 takes the frames through the ISP, counted and
- * not hashed.  FRAMED sends one access unit per packet with timestamps,
+ * not hashed, except NV12_COL128, an H.265 decoder's native column frames,
+ * hashed whole and compared with a REF made by the backend's colmd5.py.
+ * FRAMED sends one access unit per packet with timestamps,
  * FLUSH n calls VC_Flush() after n frames and sends the stream again from
  * its start (timestamps 1000 s on: a frame with an older one after the flush
- * is stale).  EXTRADATA (with FRAMED) takes the SPS and PPS before the first
- * picture out of the stream and passes them as VCA_Extradata, PAD n zero
- * bytes after them (Annex-B's trailing_zero_8bits) to make it larger.  NOPTS
+ * is stale).  EXTRADATA (with FRAMED) takes the parameter sets before the
+ * first picture (H.264's SPS and PPS, H.265's VPS, SPS and PPS) out of the
+ * stream and passes them as VCA_Extradata, PAD n zero bytes after them
+ * (Annex-B's trailing_zero_8bits) to make it larger; CONFIG file passes a
+ * file as VCA_Extradata instead (an avcC or hvcC record), TAG fourcc opens
+ * the session with it as VCA_CodecTag.  NOPTS
  * (with FRAMED) sends the access units without timestamps, NORATE opens the
  * session without a frame rate, PACKET n sets the size of an input packet
- * (the backend imports them from 512 KiB on).  A .jpg goes as one MJPEG
- * picture.
+ * (the backend imports them from 512 KiB on).  HASHES prints every frame's
+ * hash (frame.N.md5), for a host that matches frames by content when a
+ * damaged stream loses some.  OUT writes the frames: I420's planes as
+ * ffmpeg's rawvideo packs them, a column frame whole, a packed format's
+ * visible rows.  A .jpg goes as one MJPEG picture.
  */
 #ifdef __INTELLISENSE__
 #include <clib/exec_protos.h>
@@ -37,7 +45,8 @@
 #include "commands.h"
 
 const char decode_template[] =
-    "FILE/A,REF/K,OUT/K,FRAMES/N,NOHASH/S,ENCODING/K,VERBOSE/S,FRAMED/S,FPS/N,OUTFORMAT/K,FLUSH/N,BACKEND/K,EXTRADATA/S,PAD/N,NOPTS/S,NORATE/S,PACKET/N";
+    "FILE/A,REF/K,OUT/K,FRAMES/N,NOHASH/S,ENCODING/K,VERBOSE/S,FRAMED/S,FPS/N,OUTFORMAT/K,FLUSH/N,BACKEND/K,EXTRADATA/S,PAD/N,NOPTS/S,NORATE/S,PACKET/N,"
+    "HASHES/S,CONFIG/K,TAG/K";
 
 enum
 {
@@ -57,7 +66,10 @@ enum
 	ARG_PAD,
 	ARG_NOPTS,
 	ARG_NORATE,
-	ARG_PACKET
+	ARG_PACKET,
+	ARG_HASHES,
+	ARG_CONFIG,
+	ARG_TAG
 };
 
 #define DECODE_PACKETS 4               /* the session's input packets */
@@ -72,6 +84,8 @@ struct decode
 	BPTR outfile;
 	ULONG max_frames;
 	BOOL hash, verbose, framed, nopts, norate;
+	BOOL hevc;   /* H.265: its NAL headers and access unit rules */
+	BOOL hashes; /* HASHES: every frame's hash printed */
 	ULONG fps;
 	UBYTE (*ref)[16];
 	ULONG ref_count;
@@ -130,14 +144,45 @@ static BOOL next_nal(const UBYTE *s, ULONG len, ULONG *pos, ULONG *start, ULONG 
 }
 
 /**
+ * nal_kind() - What a NAL unit is to the access unit splitter.
+ * @d:     the decode, its stream in memory
+ * @hdr:   where the unit's header starts, past its start code
+ * @vcl:   set for a slice
+ * @opens: set when the unit, after a picture's slices, opens the next access unit
+ *
+ * H.264 (7.4.1.2.3): a slice with first_mb_in_slice 0 (its first header bit
+ * set, 7.3.3), or any unit but a slice.  H.265 (7.4.2.4.4): a slice with
+ * first_slice_segment_in_pic_flag, a VPS, SPS, PPS, access unit delimiter,
+ * prefix SEI, or a reserved (41 to 44) or unspecified (48 to 55) unit; the
+ * end of a sequence or of the bitstream, filler data and a suffix SEI stay
+ * with the access unit they follow.
+ */
+static void nal_kind(const struct decode *d, ULONG hdr, BOOL *vcl, BOOL *opens)
+{
+	const UBYTE *s = d->stream;
+	ULONG left = hdr < d->stream_len ? d->stream_len - hdr : 0;
+	if (d->hevc)
+	{
+		UBYTE type = left > 0 ? (UBYTE)((s[hdr] >> 1) & 0x3f) : 0;
+		*vcl = left > 0 && type < 32;
+		if (*vcl)
+			*opens = left > 2 && (s[hdr + 2] & 0x80) != 0;
+		else
+			*opens = (type >= 32 && type <= 35) || type == 39 || (type >= 41 && type <= 44) || (type >= 48 && type <= 55);
+		return;
+	}
+	UBYTE type = left > 0 ? (UBYTE)(s[hdr] & 0x1f) : 0;
+	*vcl = type >= 1 && type <= 5;
+	*opens = !*vcl || (left > 1 && (s[hdr + 1] & 0x80) != 0);
+}
+
+/**
  * next_au() - The next access unit of the stream in memory.
  * @d:        the decode
  * @au_start: where it starts
  * @au_end:   where it ends
  *
- * NAL units up to the one that opens the next picture: a non-VCL NAL after a
- * slice, or a slice with first_mb_in_slice == 0 (its first header bit set,
- * H.264 7.3.3).
+ * NAL units up to the one that opens the next picture (nal_kind()).
  *
  * Return: FALSE at the end.
  */
@@ -159,10 +204,9 @@ static BOOL next_au(struct decode *d, ULONG *au_start, ULONG *au_end)
 			break;
 		}
 		ULONG hdr = ns + (s[ns + 2] == 1 ? 3u : 4u);
-		UBYTE type = hdr < d->stream_len ? (UBYTE)(s[hdr] & 0x1f) : 0;
-		BOOL vcl = type >= 1 && type <= 5;
-		BOOL first_mb = vcl && hdr + 1 < d->stream_len && (s[hdr + 1] & 0x80) != 0;
-		if (have_vcl && (!vcl || first_mb))
+		BOOL vcl, opens;
+		nal_kind(d, hdr, &vcl, &opens);
+		if (have_vcl && opens)
 			break; /* this NAL belongs to the next picture: it is found again */
 		if (vcl)
 			have_vcl = TRUE;
@@ -175,7 +219,7 @@ static BOOL next_au(struct decode *d, ULONG *au_start, ULONG *au_end)
 }
 
 /**
- * split_config() - EXTRADATA: the SPS and PPS before the first picture, out of the stream and into the configuration.
+ * split_config() - EXTRADATA: the parameter sets before the first picture, out of the stream and into the configuration.
  * @d:   the decode, its stream in memory
  * @pad: zero bytes to put after them
  *
@@ -193,10 +237,22 @@ static BOOL split_config(struct decode *d, ULONG pad)
 	while (next_nal(s, d->stream_len, &pos, &ns, &ne))
 	{
 		ULONG hdr = ns + (s[ns + 2] == 1 ? 3u : 4u);
-		UBYTE type = hdr < d->stream_len ? (UBYTE)(s[hdr] & 0x1f) : 0;
-		if (type >= 1 && type <= 5)
+		BOOL vcl, set;
+		if (d->hevc)
+		{
+			UBYTE type = hdr < d->stream_len ? (UBYTE)((s[hdr] >> 1) & 0x3f) : 32;
+			vcl = type < 32;
+			set = type >= 32 && type <= 34; /* VPS, SPS, PPS */
+		}
+		else
+		{
+			UBYTE type = hdr < d->stream_len ? (UBYTE)(s[hdr] & 0x1f) : 0;
+			vcl = type >= 1 && type <= 5;
+			set = type == 7 || type == 8; /* SPS, PPS */
+		}
+		if (vcl)
 			break; /* the first slice */
-		if (type != 7 && type != 8)
+		if (!set)
 			continue;
 		memcpy(d->config + taken, s + ns, ne - ns);
 		taken += ne - ns;
@@ -333,6 +389,27 @@ static void plane_rows(struct decode *d, struct md5 *m, const UBYTE *base, ULONG
 }
 
 /**
+ * packed_bytes() - Bytes a pixel of a packed format.
+ * @fmt: VCF_*, not a planar one
+ *
+ * Return: 2, 3 or 4.
+ */
+static ULONG packed_bytes(ULONG fmt)
+{
+	switch (fmt)
+	{
+	case VCF_RGB24:
+	case VCF_BGR24:
+		return 3;
+	case VCF_BGRA32:
+	case VCF_RGBA32:
+		return 4;
+	default:
+		return 2; /* RGB16, YUYV, UYVY */
+	}
+}
+
+/**
  * handle_frame() - A decoded frame: its visible area hashed and written, planes Y U V back to back as ffmpeg does.
  * @d: the decode
  * @f: the frame
@@ -373,9 +450,16 @@ static void handle_frame(struct decode *d, const struct VCFrame *f)
 	}
 	else if (d->flushed)
 		d->after_flush++;
-	if (d->outfmt != VCF_I420)
+	if (d->outfmt != VCF_I420 && d->outfmt != VCF_NV12_COL128)
 	{
-		d->out_bytes += (u64)f->Pitch[0] * (ULONG)ch; /* a packed picture: counted, not hashed */
+		d->out_bytes += (u64)f->Pitch[0] * (ULONG)ch; /* a packed picture: counted, not hashed, written as its visible rows */
+		if (d->outfile != 0)
+		{
+			ULONG bpp = packed_bytes(d->outfmt);
+			const UBYTE *rows = (const UBYTE *)f->Data + f->Offset[0] + (ULONG)cx * bpp;
+			for (LONG r = cy; r < cy + ch; r++)
+				Write(d->outfile, (APTR)(rows + (ULONG)r * f->Pitch[0]), (LONG)((ULONG)cw * bpp));
+		}
 		d->frames++;
 		return;
 	}
@@ -384,13 +468,46 @@ static void handle_frame(struct decode *d, const struct VCFrame *f)
 	struct md5 m;
 	md5_init(&m);
 	u32 t0 = get_time();
-	plane_rows(d, &m, data + f->Offset[0], f->Pitch[0], (ULONG)cx, (ULONG)cy, (ULONG)cw, (ULONG)ch);
-	plane_rows(d, &m, data + f->Offset[1], f->Pitch[1], (ULONG)cx / 2u, (ULONG)cy / 2u, (ULONG)cw / 2u, (ULONG)ch / 2u);
-	plane_rows(d, &m, data + f->Offset[2], f->Pitch[2], (ULONG)cx / 2u, (ULONG)cy / 2u, (ULONG)cw / 2u, (ULONG)ch / 2u);
+	if (d->outfmt == VCF_NV12_COL128)
+	{
+		/* the column frame: the visible window hashed column by column, luma lines then chroma lines, as the
+		   backend's colmd5.py hashes ffmpeg's output (the padding the decoder writes is left out); written out whole */
+		ULONG columns = f->Width / 128u, rows = f->Offset[1] / 128u, bytes = f->Pitch[0] * columns;
+		for (ULONG c = 0; c < columns && d->hash; c++)
+		{
+			LONG b0 = cx - (LONG)(c * 128u), b1 = cx + cw - (LONG)(c * 128u);
+			const UBYTE *col = data + c * f->Pitch[0];
+			if (b0 < 0)
+				b0 = 0;
+			if (b1 > 128)
+				b1 = 128;
+			if (b1 <= b0)
+				continue;
+			for (LONG r = cy; r < cy + ch; r++)
+				md5_update(&m, col + r * 128 + b0, (ULONG)(b1 - b0));
+			for (LONG r = cy / 2; r < (cy + ch) / 2; r++)
+				md5_update(&m, col + ((LONG)rows + r) * 128 + b0, (ULONG)(b1 - b0));
+		}
+		if (d->outfile != 0)
+			Write(d->outfile, (APTR)data, (LONG)bytes);
+		d->out_bytes += bytes;
+	}
+	else
+	{
+		plane_rows(d, &m, data + f->Offset[0], f->Pitch[0], (ULONG)cx, (ULONG)cy, (ULONG)cw, (ULONG)ch);
+		plane_rows(d, &m, data + f->Offset[1], f->Pitch[1], (ULONG)cx / 2u, (ULONG)cy / 2u, (ULONG)cw / 2u, (ULONG)ch / 2u);
+		plane_rows(d, &m, data + f->Offset[2], f->Pitch[2], (ULONG)cx / 2u, (ULONG)cy / 2u, (ULONG)cw / 2u, (ULONG)ch / 2u);
+		d->out_bytes += (u64)cw * (ULONG)ch * 3u / 2u;
+	}
 	if (d->hash)
 		md5_final(&m, d->digest);
 	d->t_hash += get_time() - t0;
-	d->out_bytes += (u64)cw * (ULONG)ch * 3u / 2u;
+	if (d->hash && d->hashes)
+	{
+		char a[33];
+		digest_text(d->digest, a);
+		kv_str(kv_at("frame", d->frames, "md5"), a);
+	}
 
 	if (d->hash && d->ref != NULL && d->frames < d->ref_count)
 	{
@@ -568,12 +685,17 @@ static void handle_event(struct decode *d, const struct VCEvent *e)
  * @name: ENCODING, or NULL
  * @file: the stream's name
  *
- * Return: VCC_H264 or VCC_MJPEG (a .jpg too: one picture per packet through the video decoder); VCC_None for a bad name.
+ * Return: VCC_H264, VCC_H265 (H265 or HEVC; .h265, .hevc, .265) or VCC_MJPEG (a .jpg too: one picture per packet
+ * through the video decoder); VCC_None for a bad name.
  */
 static ULONG codec_of(const char *name, const char *file)
 {
 	if (name != NULL)
 	{
+		if ((name[0] == 'H' || name[0] == 'h') && name[1] == '2' && name[2] == '6' && name[3] == '5')
+			return VCC_H265;
+		if ((name[0] == 'H' || name[0] == 'h') && (name[1] == 'E' || name[1] == 'e'))
+			return VCC_H265;
 		if (name[0] == 'H' || name[0] == 'h')
 			return VCC_H264;
 		if ((name[0] == 'M' || name[0] == 'm') && (name[1] == 'J' || name[1] == 'j'))
@@ -586,7 +708,9 @@ static ULONG codec_of(const char *name, const char *file)
 		ext--;
 	BOOL jpeg = (ext[0] == 'j' || ext[0] == 'J') && (ext[1] == 'p' || ext[1] == 'P');
 	BOOL mjpeg = (ext[0] == 'm' || ext[0] == 'M') && (ext[1] == 'j' || ext[1] == 'J');
-	return jpeg || mjpeg ? VCC_MJPEG : VCC_H264;
+	BOOL hevc = ((ext[0] == 'h' || ext[0] == 'H') && ext[1] == '2' && ext[2] == '6' && ext[3] == '5') ||
+	            ((ext[0] == 'h' || ext[0] == 'H') && (ext[1] == 'e' || ext[1] == 'E')) || (ext[0] == '2' && ext[1] == '6' && ext[2] == '5');
+	return jpeg || mjpeg ? VCC_MJPEG : hevc ? VCC_H265 : VCC_H264;
 }
 
 /**
@@ -716,32 +840,44 @@ int do_decode(struct tool *t, LONG *args)
 	const char *outfmt_name = arg_str(args, ARG_OUTFORMAT);
 	d.t = t;
 	d.verbose = args[ARG_VERBOSE] != 0;
+	d.hashes = args[ARG_HASHES] != 0;
 	d.framed = args[ARG_FRAMED] != 0;
 	d.nopts = args[ARG_NOPTS] != 0;
 	d.norate = args[ARG_NORATE] != 0;
 	d.fps = arg_num(args, ARG_FPS, 30u);
 	d.max_frames = arg_num(args, ARG_FRAMES, NO_LIMIT);
 	d.outfmt = outfmt_name != NULL ? format_of_name(outfmt_name) : VCF_I420;
-	d.hash = args[ARG_NOHASH] == 0 && d.outfmt == VCF_I420;
+	d.hash = args[ARG_NOHASH] == 0 && (d.outfmt == VCF_I420 || d.outfmt == VCF_NV12_COL128);
 	d.flush_at = arg_num(args, ARG_FLUSH, 0);
 	t->backend = arg_str(args, ARG_BACKEND);
 	md5_init(&d.in_md5);
 	ULONG codec = codec_of(arg_str(args, ARG_ENCODING), file);
 	if (codec == VCC_None)
 	{
-		kv_str("fail", "ENCODING: H264 or MJPEG");
+		kv_str("fail", "ENCODING: H264, H265 or MJPEG");
 		return RETURN_FAIL;
 	}
+	d.hevc = codec == VCC_H265;
 	BOOL extradata = args[ARG_EXTRADATA] != 0;
-	if (d.outfmt == 0 || d.fps == 0 || (d.flush_at != 0 && (!d.framed || ref != NULL)) ||
-	    (extradata && (!d.framed || codec != VCC_H264)))
+	const char *config_name = arg_str(args, ARG_CONFIG);
+	const char *tag_text = arg_str(args, ARG_TAG);
+	ULONG codec_tag = tag_text != NULL ? tag_of_name(tag_text) : 0u;
+	if (tag_text != NULL && codec_tag == 0)
 	{
-		kv_str("fail", "OUTFORMAT: I420, RGB16, RGB24, BGR24, BGRA32 or RGBA32; FPS: 1 or more; FLUSH needs FRAMED, and no REF; "
-		               "EXTRADATA needs FRAMED and H.264");
+		kv_str("fail", "TAG: one to four characters");
+		return RETURN_FAIL;
+	}
+	if (d.outfmt == 0 || d.fps == 0 || (d.flush_at != 0 && (!d.framed || ref != NULL)) ||
+	    (extradata && (!d.framed || (codec != VCC_H264 && codec != VCC_H265) || config_name != NULL)))
+	{
+		kv_str("fail", "OUTFORMAT: I420, NV12_COL128, RGB16, RGB24, BGR24, BGRA32 or RGBA32; FPS: 1 or more; FLUSH needs FRAMED, and no REF; "
+		               "EXTRADATA needs FRAMED and H.264 or H.265, and no CONFIG");
 		return RETURN_FAIL;
 	}
 	kv_str("decode.file", file);
 	kv_str("decode.codec", codec_name(codec));
+	if (tag_text != NULL)
+		kv_str("decode.tag", tag_text);
 	kv_bool("decode.framed", d.framed);
 	kv_bool("decode.hash", d.hash);
 	kv_str("decode.out_format", format_name(d.outfmt));
@@ -774,6 +910,28 @@ int do_decode(struct tool *t, LONG *args)
 		if (extradata)
 			kv_unum("decode.extradata", d.config_len);
 	}
+	if (config_name != NULL)
+	{
+		/* CONFIG: the file whole as the codec configuration */
+		BPTR cf = Open((CONST_STRPTR)config_name, MODE_OLDFILE);
+		LONG csize = -1;
+		if (cf != 0)
+		{
+			Seek(cf, 0, OFFSET_END);
+			csize = Seek(cf, 0, OFFSET_BEGINNING);
+		}
+		d.config = csize > 0 ? AllocVec((ULONG)csize, MEMF_ANY) : NULL;
+		BOOL read_ok = d.config != NULL && Read(cf, d.config, csize) == csize;
+		if (cf != 0)
+			Close(cf);
+		if (!read_ok)
+		{
+			kv_str("fail", "CONFIG: the file did not read");
+			goto out_files;
+		}
+		d.config_len = (ULONG)csize;
+		kv_unum("decode.extradata", d.config_len);
+	}
 	if (ref != NULL && !load_ref(&d, ref))
 	{
 		kv_str("fail", "the reference did not load");
@@ -798,7 +956,7 @@ int do_decode(struct tool *t, LONG *args)
 	d.s = VC_OpenSessionTags(VCA_Codec, codec, VCA_Kind, VCK_Decoder, VCA_SigTask, (ULONG)t->waiter.task, VCA_SigMask, waiter_sigmask(&t->waiter),
 	                         VCA_Framed, (ULONG)d.framed, VCA_FrameRateNum, rate, VCA_FrameRateDen, 1, VCA_InputCount, DECODE_PACKETS,
 	                         VCA_InputSize, chunk, VCA_OutputFormat, d.outfmt, BACKEND_TAG(t), VCA_Extradata, (ULONG)d.config,
-	                         VCA_ExtradataSize, d.config_len, VCA_ErrorPtr, (ULONG)&err, TAG_DONE);
+	                         VCA_ExtradataSize, d.config_len, VCA_CodecTag, codec_tag, VCA_ErrorPtr, (ULONG)&err, TAG_DONE);
 	kv_str("decode.session", d.s != NULL ? "open" : "refused");
 	if (d.s == NULL)
 	{

@@ -125,8 +125,9 @@ def test_converter_session_rate(device, material, baselines, artifacts, record_p
 
 
 def test_converter_refuses_unlisted(device, material):
-    """An input format the converter does not name (UYVY) is refused at the open, VCERR_UNSUPPORTED, not left to the firmware."""
-    r = vctest(device, f"CONVERT {material.ram('frame640.yuyv')} WIDTH 640 HEIGHT 480 FORMAT UYVY OUTFORMAT RGB24 COUNT 1 OUT RAM:hw/x.ppm")
+    """An input format the converter does not name is refused at the open, VCERR_UNSUPPORTED, not left to the firmware: YV12,
+    which the firmware lists but reads with its chroma planes swapped (docs/firmware-facts.md)."""
+    r = vctest(device, f"CONVERT {material.ram('frame640.yuyv')} WIDTH 640 HEIGHT 480 FORMAT YV12 OUTFORMAT RGB24 COUNT 1 OUT RAM:hw/x.ppm")
     assert not r.passed and r.kv.get("convert.session") == "refused", f"session {r.kv.get('convert.session')}: {r.kv.get('fail')}"
     assert r.num("error") == -6, f"error {r.kv.get('error')}, not VCERR_UNSUPPORTED"
 

@@ -19,39 +19,113 @@
 #include "picture.h"
 
 /**
- * fmt_planar() - Whether a format is planar YUV 4:2:0.
+ * fmt_planar() - Whether a format is planar YUV: its planes one after another.
  * @f: VCF_*
  *
- * Return: TRUE for I420, YV12 and NV12.
+ * Return: TRUE for I420, YV12, I422, NV12 and NV21.
  */
 BOOL fmt_planar(ULONG f)
 {
-	return f == VCF_I420 || f == VCF_YV12 || f == VCF_NV12;
+	return f == VCF_I420 || f == VCF_YV12 || f == VCF_I422 || fmt_pairs(f);
+}
+
+/**
+ * fmt_pairs() - Whether a planar format keeps its chroma as one plane of pairs.
+ * @f: VCF_*
+ *
+ * Return: TRUE for NV12 and NV21.
+ */
+BOOL fmt_pairs(ULONG f)
+{
+	return f == VCF_NV12 || f == VCF_NV21;
+}
+
+/**
+ * fmt_column() - Whether a format lays the picture out in 128-byte columns.
+ * @f: VCF_*
+ *
+ * Return: TRUE for NV12_COL128 and NV12_10_COL128.
+ */
+BOOL fmt_column(ULONG f)
+{
+	return f == VCF_NV12_COL128 || f == VCF_NV12_10_COL128;
+}
+
+#define COLUMN_BYTES 128u     /* a column row's bytes */
+#define COLUMN10_SAMPLES 96u  /* the 10-bit column format's samples a row: three in each 32 bits */
+
+/**
+ * column_pixels() - A column format's pixels across a column.
+ * @f: VCF_*, a column format
+ *
+ * Return: 128 for 8-bit samples, 96 for 10-bit ones.
+ */
+static ULONG column_pixels(ULONG f)
+{
+	return f == VCF_NV12_10_COL128 ? COLUMN10_SAMPLES : COLUMN_BYTES;
+}
+
+/**
+ * chroma_rows() - A planar format's chroma rows for @rows luma rows.
+ * @f:    VCF_*, a planar format
+ * @rows: the luma rows
+ *
+ * Return: every row for 4:2:2, half of them for 4:2:0.
+ */
+static ULONG chroma_rows(ULONG f, ULONG rows)
+{
+	return f == VCF_I422 ? rows : rows / 2u;
 }
 
 /**
  * fmt_bpp() - A packed format's bytes per pixel.
  * @f: VCF_*
  *
- * Return: 2, 3 or 4; 1 for a planar format (its luma plane).
+ * Return: 2, 3 or 4; 1 for a planar format (its luma plane) and CLUT8.
  */
 ULONG fmt_bpp(ULONG f)
 {
 	switch (f)
 	{
 	case VCF_RGB16:
+	case VCF_RGB16BE:
+	case VCF_RGB15:
+	case VCF_RGB15BE:
 	case VCF_YUYV:
 	case VCF_UYVY:
+	case VCF_YVYU:
+	case VCF_VYUY:
 		return 2;
 	case VCF_RGB24:
 	case VCF_BGR24:
 		return 3;
 	case VCF_BGRA32:
 	case VCF_RGBA32:
+	case VCF_RGBX32:
+	case VCF_BGRX32:
+	case VCF_ARGB32:
+	case VCF_ABGR32:
 		return 4;
 	default:
 		return 1;
 	}
+}
+
+/**
+ * raw_bytes() - A picture's bytes as ffmpeg's rawvideo holds it: the visible planes back to back.
+ * @f: VCF_*, not a column format
+ * @w: width
+ * @h: height
+ *
+ * Return: the bytes.
+ */
+ULONG raw_bytes(ULONG f, ULONG w, ULONG h)
+{
+	if (fmt_pairs(f))
+		return w * h + w * (h / 2u);
+	if (fmt_planar(f))
+		return w * h + 2u * (w / 2u) * chroma_rows(f, h);
+	return w * h * fmt_bpp(f);
 }
 
 static ULONG align32(ULONG v)
@@ -69,8 +143,10 @@ static ULONG align32(ULONG v)
  * @pitch: bytes per luma row
  *
  * Rows of @pitch bytes; a planar picture's luma rows aligned to 32 pixels
- * and 16 rows, the chroma planes after.  NV12, which only the converter
- * reads, has its chroma right after its own rows, as a camera sends it.
+ * and 16 rows, the chroma planes after.  NV12 and NV21, which only the
+ * converter reads, have their chroma right after their own rows, as a camera
+ * sends it.  A column picture's @pitch is one column's bytes; its rows are a
+ * multiple of 16, the chroma rows follow them inside each column.
  *
  * Return: the bytes the picture takes.
  */
@@ -84,12 +160,23 @@ ULONG frame_view(struct VCFrame *f, APTR data, ULONG fmt, ULONG w, ULONG h, ULON
 	f->Crop.Width = (LONG)w;
 	f->Crop.Height = (LONG)h;
 	f->Pitch[0] = pitch;
+	if (fmt_column(fmt))
+	{
+		ULONG across = column_pixels(fmt);
+		ULONG rows = (h + 15u) & ~15u, columns = (w + across - 1u) / across;
+		f->Width = columns * across;
+		f->Height = rows;
+		f->Planes = 2;
+		f->Offset[1] = COLUMN_BYTES * rows;
+		f->Pitch[1] = pitch;
+		return columns * pitch;
+	}
 	if (fmt_planar(fmt))
 	{
-		ULONG ha = fmt == VCF_NV12 ? h : (h + 15u) & ~15u;
+		ULONG ha = fmt_pairs(fmt) ? h : (h + 15u) & ~15u;
 		f->Width = pitch;
 		f->Height = ha;
-		if (fmt == VCF_NV12)
+		if (fmt_pairs(fmt))
 		{
 			f->Planes = 2;
 			f->Offset[1] = pitch * ha;
@@ -97,10 +184,11 @@ ULONG frame_view(struct VCFrame *f, APTR data, ULONG fmt, ULONG w, ULONG h, ULON
 			return f->Offset[1] + pitch * (ha / 2u);
 		}
 		f->Planes = 3;
-		ULONG chroma = (pitch / 2u) * (ha / 2u);
+		ULONG chroma = (pitch / 2u) * chroma_rows(fmt, ha);
+		BOOL v_first = fmt == VCF_YV12;
 		f->Pitch[1] = f->Pitch[2] = pitch / 2u;
-		f->Offset[1] = fmt == VCF_I420 ? pitch * ha : pitch * ha + chroma;
-		f->Offset[2] = fmt == VCF_I420 ? pitch * ha + chroma : pitch * ha;
+		f->Offset[1] = v_first ? pitch * ha + chroma : pitch * ha;
+		f->Offset[2] = v_first ? pitch * ha : pitch * ha + chroma;
 		return pitch * ha + 2u * chroma;
 	}
 	f->Planes = 1;
@@ -110,14 +198,21 @@ ULONG frame_view(struct VCFrame *f, APTR data, ULONG fmt, ULONG w, ULONG h, ULON
 }
 
 /**
- * natural_pitch() - The pitch the backend wants for a row of @w pixels.
+ * natural_pitch() - The pitch the backend wants for a picture of @w by @h.
  * @fmt: VCF_*
  * @w:   pixels per row
+ * @h:   rows
  *
- * Return: bytes per row: whole groups of 32 pixels, 64 for a planar format.
+ * Return: bytes per row: whole groups of 32 pixels, 64 for a planar format;
+ * for a column format one column's bytes, 128 per luma and chroma row.
  */
-ULONG natural_pitch(ULONG fmt, ULONG w)
+ULONG natural_pitch(ULONG fmt, ULONG w, ULONG h)
 {
+	if (fmt_column(fmt))
+	{
+		ULONG rows = (h + 15u) & ~15u;
+		return 128u * (rows + rows / 2u);
+	}
 	return fmt_planar(fmt) ? (w + 63u) & ~63u : align32(w) * fmt_bpp(fmt);
 }
 
@@ -134,7 +229,16 @@ ULONG natural_pitch(ULONG fmt, ULONG w)
 BOOL raw_into_frame(BPTR file, UBYTE *tmp, struct VCFrame *f, ULONG w, ULONG h)
 {
 	ULONG fmt = f->Format;
-	ULONG bytes = fmt_planar(fmt) ? w * h * 3u / 2u : w * h * fmt_bpp(fmt);
+	if (fmt_column(fmt))
+	{
+		/* the file holds the columns as the buffer does: straight in */
+		ULONG size = f->Pitch[0] * (f->Width / column_pixels(fmt));
+		LONG n = Read(file, f->Data, (LONG)size);
+		if (n > 0 && (ULONG)n != size)
+			note("a short picture at the end of the file (%ld of %lu bytes): dropped\n", n, size);
+		return n > 0 && (ULONG)n == size;
+	}
+	ULONG bytes = raw_bytes(fmt, w, h);
 	LONG n = Read(file, tmp, (LONG)bytes);
 	if (n <= 0)
 		return FALSE;
@@ -149,12 +253,12 @@ BOOL raw_into_frame(BPTR file, UBYTE *tmp, struct VCFrame *f, ULONG w, ULONG h)
 	{
 		for (ULONG r = 0; r < h; r++, src += w)
 			CopyMem((APTR)src, d + f->Offset[0] + r * f->Pitch[0], w);
-		if (fmt == VCF_NV12)
+		if (fmt_pairs(fmt))
 			for (ULONG r = 0; r < h / 2u; r++, src += w)
 				CopyMem((APTR)src, d + f->Offset[1] + r * f->Pitch[1], w);
 		else
 			for (ULONG pl = 1; pl <= 2; pl++)
-				for (ULONG r = 0; r < h / 2u; r++, src += w / 2u)
+				for (ULONG r = 0; r < chroma_rows(fmt, h); r++, src += w / 2u)
 					CopyMem((APTR)src, d + f->Offset[pl] + r * f->Pitch[pl], w / 2u);
 		return TRUE;
 	}
@@ -228,13 +332,16 @@ BOOL frame_to_file(const char *name, const struct VCFrame *f)
 	{
 		for (ULONG r = 0; r < h && ok; r++)
 			ok = Write(out, (APTR)(d + f->Offset[0] + (y + r) * f->Pitch[0] + x), (LONG)w) == (LONG)w;
-		if (f->Format == VCF_NV12)
+		if (fmt_pairs(f->Format))
 			for (ULONG r = 0; r < h / 2u && ok; r++)
 				ok = Write(out, (APTR)(d + f->Offset[1] + (y / 2u + r) * f->Pitch[1] + x), (LONG)w) == (LONG)w;
 		else
+		{
+			ULONG top = chroma_rows(f->Format, y * 2u) / 2u; /* the first visible row's chroma row */
 			for (ULONG pl = 1; pl <= 2 && ok; pl++)
-				for (ULONG r = 0; r < h / 2u && ok; r++)
-					ok = Write(out, (APTR)(d + f->Offset[pl] + (y / 2u + r) * f->Pitch[pl] + x / 2u), (LONG)(w / 2u)) == (LONG)(w / 2u);
+				for (ULONG r = 0; r < chroma_rows(f->Format, h) && ok; r++)
+					ok = Write(out, (APTR)(d + f->Offset[pl] + (top + r) * f->Pitch[pl] + x / 2u), (LONG)(w / 2u)) == (LONG)(w / 2u);
+		}
 	}
 	else
 	{
@@ -291,7 +398,7 @@ UBYTE *load_file(const char *name, ULONG *len)
  */
 APTR picture_alloc(struct VCFrame *f, ULONG fmt, ULONG w, ULONG h, BOOL misalign, ULONG *size)
 {
-	ULONG pitch = natural_pitch(fmt, w);
+	ULONG pitch = natural_pitch(fmt, w, h);
 	struct VCFrame probe;
 	*size = frame_view(&probe, NULL, fmt, w, h, pitch);
 	APTR block = AllocVec(ALIGN_UP(*size, PICTURE_ALIGN) + PICTURE_ALIGN + 4u, MEMF_PUBLIC | MEMF_FAST);

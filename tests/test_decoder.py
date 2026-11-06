@@ -53,6 +53,14 @@ def test_backend_named(device, material):
     assert r.num("ref.compared") == 150 and r.num("ref.mismatches") == 0
 
 
+def test_codec_tag(device, material):
+    """VCA_CodecTag avc1, the FourCC of an MP4's H.264: videocore.codec's rows serve every form, so the same frames."""
+    r = decode(device, material, "clip42.h264", "FRAMED FRAMES 150 TAG avc1")
+    assert r.passed, r.kv.get("fail")
+    assert r.kv.get("decode.tag") == "avc1"
+    assert r.num("ref.compared") == 150 and r.num("ref.mismatches") == 0
+
+
 def test_unknown_backend_refused(device, material):
     """A backend that does not exist is refused at once (-3), no hang."""
     r = decode(device, material, "clip42.h264", "BACKEND nosuch", ref=False, timeout=30)

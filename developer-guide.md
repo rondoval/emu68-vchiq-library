@@ -497,7 +497,7 @@ command's source say what the arguments do.
 | `ABANDON` | leaves the session as a crash in mid-flight would, for the repair test; needs the test hooks (8.2) | `abandon.*` |
 | `AUDIO` | silence or a tone through the firmware's audio service, driven directly; `DEST` 1 the jack, 2 HDMI0, 3 HDMI1 | `run.N.*`, `stop.N.*`, `pins.*` |
 | `AHIWALK`, `AHITONE` | a channel walk or a tone through an AHI mode | `ahi.*` |
-| `DECODE` | a decoder session over an Annex-B file, each frame's MD5 compared with ffmpeg's `framemd5` | `decode.*`, `stream.N.*`, `ref.*`, `mismatch.N.*`, `flush.*` |
+| `DECODE` | a decoder session over an Annex-B file, each frame's MD5 compared with ffmpeg's `framemd5` | `decode.*`, `stream.N.*`, `ref.*`, `mismatch.N.*`, `flush.*`, `keep.*`, `resignal.*` |
 | `IMAGE` | a still picture through `VC_DecodeImage()` | `header.*`, `image.*` |
 | `TOJPEG`, `CONVERT` | the other image calls | `encode_image.*`, `convert.*` |
 | `ENCODE` | an H.264 encoder session over a raw file, I420 or any `FORMAT`, `OUTWIDTH` and `OUTHEIGHT` through the ISP; `PACE`, `PACKET`, `GAPS`, `ENDEMPTY`, `HOLD` for the tests | `encode.*`, `packet.N.*` |

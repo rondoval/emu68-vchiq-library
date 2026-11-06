@@ -93,11 +93,13 @@
 
 /*
  * VCSessionParams.Changed: what a VCB_SetAttrs() carries (0 at open:
- * everything).  An output geometry change merges into what the session
- * has: a field given replaces the one kept, 0 keeps it; a new format or
- * width without a pitch drops the pitch kept; HaveDestRect and KeepAspect
- * replace each other.  The frontend reopens a converter behind a decoder
- * with what it merged by the same rule, at each new stream shape.
+ * everything).  A SigTask or SigMask set in a VCB_SetAttrs() is signalled
+ * from then on, whatever Changed says.  An output geometry change merges
+ * into what the session has: a field given replaces the one kept, 0 keeps
+ * it; a new format or width without a pitch drops the pitch kept;
+ * HaveDestRect and KeepAspect replace each other.  The frontend reopens a
+ * converter behind a decoder with what it merged by the same rule, at each
+ * new stream shape.
  */
 #define VCSPF_Bitrate (1UL << 0)
 #define VCSPF_RequestKeyFrame (1UL << 1)
@@ -125,8 +127,8 @@ struct VCSessionParams
 	ULONG KeepAspect;                    /* fit the picture in the output frame, centred, instead of stretching it */
 	ULONG InputCount, InputSize;         /* the backend's own input buffers: how many, and a packet's bytes */
 	ULONG OutputCount, OutputSize;       /* the backend's own output buffers: how many, and a packet's bytes */
-	struct Task *SigTask;                /* the task to signal: the opener when a mask came without one */
-	ULONG SigMask;                       /* the signal bits to Signal() when something is ready; 0: the client polls */
+	struct Task *SigTask;                /* the task to signal: the opener when a mask came without one; VCB_SetAttrs(): another, when set */
+	ULONG SigMask;                       /* the signal bits to Signal() when something is ready; 0: the client polls; VCB_SetAttrs(): others, when set */
 	ULONG Framed;                        /* a decoder: each packet holds whole pictures */
 	struct VCRational FrameRate;         /* the input's frame rate; Num 0 when not given */
 	ULONG Bitrate, Profile, Level;       /* an encoder: bits per second, VCP_*, H.264 level times ten */

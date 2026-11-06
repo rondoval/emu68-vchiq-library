@@ -58,6 +58,16 @@ def test_codec_tag(device, material):
     r = decode(device, material, "clip42.h264", "FRAMED FRAMES 150 TAG avc1")
     assert r.passed, r.kv.get("fail")
     assert r.kv.get("decode.tag") == "avc1"
+
+
+@pytest.mark.parametrize("extra", [pytest.param("", id="native"), pytest.param("OUTFORMAT RGBA32", id="through-isp")])
+def test_resignal(device, material, extra):
+    """The session moved to another signal bit after thirty frames (VC_SetAttrsTags(VCA_SigMask)), VCTest waiting for that
+    bit only from then on: every frame still comes, so each of the backend's components signals the new bit."""
+    r = decode(device, material, "clip42.h264", f"RESIGNAL 30 {extra}", ref=extra == "")
+    assert r.passed, r.kv.get("fail")
+    assert r.num("resignal.at") == 30 and r.num("resignal.rc") == 0
+    assert r.num("decode.frames") == 300
     assert r.num("ref.compared") == 150 and r.num("ref.mismatches") == 0
 
 

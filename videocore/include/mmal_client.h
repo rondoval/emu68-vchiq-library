@@ -340,6 +340,8 @@ void mmal_component_destroy(struct VideoCoreBase *base, struct mmal_component *c
 BOOL mmal_component_keep(struct VideoCoreBase *base, struct mmal_component *component);
 /* A kept component of a name, its ports as at its first create; NULL if none */
 struct mmal_component *mmal_component_take(struct VideoCoreBase *base, const char *name, struct Task *task, ULONG sigmask);
+/* Signal another task, or with another signal, from now on */
+void mmal_component_retarget(struct VideoCoreBase *base, struct mmal_component *component, struct Task *task, ULONG sigmask);
 /* Enable its control port, then the component itself */
 LONG mmal_component_enable(struct VideoCoreBase *base, struct mmal_component *component);
 /* Its first ERROR event, as a VCERR_*; 0 while none came */

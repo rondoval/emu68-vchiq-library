@@ -299,7 +299,8 @@ go back to the decoder, and the client gets the converter's frames and the
 decoder's packets, with one `VCEV_StreamInfo` carrying the converter's
 output. The decoder's end goes through the converter as a mark, so the
 client's `VCEV_EndOfStream` follows the last picture. A change of the
-stream's shape remakes the converter. This is how
+stream's shape opens a new converter; the old one stays open while the client
+holds frames of it, and closes when the last comes back. This is how
 the H.265 backend's column frames (`VCF_NV12_COL128`, read by the ISP
 converter) reach a screen; the rule is general.
 

@@ -28,6 +28,14 @@
   own output frames by index; the frontend imports them into the converter it
   chains. Output frames can be imported into a chained session once
   `VCEV_StreamInfo` came. The column format `VCF_NV12_COL128` is settled.
+- **A picture on screen survives a size change.** When an H.265 stream
+  changes its picture size, the picture a player still shows stays valid
+  until the player gives it back: the converter of the old size stays open
+  for it, and closes then.
+- **For programmers: a session can change hands.** `VC_SetAttrsTags()` with
+  `VCA_SigTask` or `VCA_SigMask` makes the VideoCore signal another task or
+  signal from then on, as the H.265 backend already did; a player can hand a
+  session to another task.
 
 ---
 

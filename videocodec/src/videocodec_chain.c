@@ -13,7 +13,8 @@
  * frames go into the converter, the converter's returned input frames go
  * back to the decoder, and the client gets the converter's frames and
  * events and the decoder's packets.  Both backends signal the client's
- * task.
+ * task.  A new shape opens a new converter; the old one stays open while
+ * the client holds frames of it, and closes when the last comes back.
  *
  * Every function calls one backend: the generated VCB_* calls go through a
  * local VCBackendBase, so the other backend is reached through a helper
@@ -34,6 +35,13 @@ struct chain_import
 	BOOL sent; /* in the converter until it returns it, with the decoder's picture or the end mark */
 };
 
+/* One of the converters' output frames in the client's hands */
+struct chain_held
+{
+	struct VCFrame *frame;
+	APTR converter; /* the one it came from: the current one, or one of an old shape kept open for it */
+};
+
 /*
  * A converter behind a decoder whose native output the client cannot take:
  * the pump moves the decoder's frames through it, and the client sees one
@@ -50,6 +58,8 @@ struct vc_chain
 	struct chain_import *end_import;         /* the import carrying the end mark through the converter, or NULL */
 	struct chain_import imports[CHAIN_FRAMES_MAX];
 	ULONG import_count;
+	struct chain_held held[CHAIN_FRAMES_MAX]; /* the frames the client holds */
+	ULONG held_count;
 };
 
 /* What one poll of one backend gave */
@@ -238,19 +248,85 @@ static void import_returned(struct VCSession *session, struct chain_import *impo
 }
 
 /**
- * converter_close() - Close the converter, if open (VCB_CloseSession()).
+ * held_add() - Note one of the converter's frames going to the client.
+ * @chain: the chain
+ * @frame: the frame
+ *
+ * A frame past the table's room is not noted: its release goes to the
+ * current converter, and an old one is not kept open for it.
+ */
+static void held_add(struct vc_chain *chain, struct VCFrame *frame)
+{
+	if (chain->held_count < CHAIN_FRAMES_MAX)
+		chain->held[chain->held_count++] = (struct chain_held){.frame = frame, .converter = chain->converter};
+}
+
+/**
+ * held_take() - Take a frame the client gave back off the table.
+ * @chain: the chain
+ * @frame: the frame
+ *
+ * Return: the converter it came from, NULL for a frame not noted.
+ */
+static APTR held_take(struct vc_chain *chain, const struct VCFrame *frame)
+{
+	for (ULONG i = 0; i < chain->held_count; i++)
+	{
+		if (chain->held[i].frame != frame)
+			continue;
+		APTR converter = chain->held[i].converter;
+		chain->held[i] = chain->held[--chain->held_count];
+		return converter;
+	}
+	return NULL;
+}
+
+/**
+ * held_from() - Whether the client holds a frame of a converter.
+ * @chain:     the chain
+ * @converter: the converter's session
+ *
+ * Return: TRUE when it does.
+ */
+static BOOL held_from(const struct vc_chain *chain, APTR converter)
+{
+	for (ULONG i = 0; i < chain->held_count; i++)
+		if (chain->held[i].converter == converter)
+			return TRUE;
+	return FALSE;
+}
+
+/**
+ * held_forget() - Take every frame of a converter off the table.
+ * @chain:     the chain
+ * @converter: the converter's session
+ */
+static void held_forget(struct vc_chain *chain, APTR converter)
+{
+	ULONG kept = 0;
+	for (ULONG i = 0; i < chain->held_count; i++)
+		if (chain->held[i].converter != converter)
+			chain->held[kept++] = chain->held[i];
+	chain->held_count = kept;
+}
+
+/**
+ * converter_retire() - Let the converter go, if open (VCB_CloseSession()).
  * @session: the session
  *
- * Its input frames go with it: every import it held is taken back
- * (import_returned()).
+ * Every import it held is taken back (import_returned()); what it was
+ * still converting is dropped.  It closes now unless the client holds
+ * frames of it: then it stays open until the last comes back
+ * (chain_release_frame()).
  */
-static void converter_close(struct VCSession *session)
+static void converter_retire(struct VCSession *session)
 {
 	struct vc_chain *chain = session->chain;
 	if (chain->converter == NULL)
 		return;
 	struct Library *VCBackendBase = chain->converter_backend->library;
-	VCB_CloseSession(chain->converter);
+	if (!held_from(chain, chain->converter))
+		VCB_CloseSession(chain->converter);
 	chain->converter = NULL;
 	for (ULONG i = 0; i < chain->import_count; i++)
 		if (chain->imports[i].sent)
@@ -289,7 +365,7 @@ static LONG imports_make(struct VCSession *session)
 }
 
 /**
- * converter_open() - Open the converter for the stream's shape, the old one closed first (VCB_OpenSession()).
+ * converter_open() - Open the converter for the stream's shape, the old one retired first (VCB_OpenSession()).
  * @session: the session, its chain's shape just set
  *
  * The input side is the decoder's frames: their format and size, the
@@ -301,7 +377,7 @@ static LONG converter_open(struct VCSession *session)
 {
 	struct vc_chain *chain = session->chain;
 	struct Library *VCBackendBase = chain->converter_backend->library;
-	converter_close(session);
+	converter_retire(session);
 
 	struct VCSessionParams params = chain->converter_params;
 	params.Width = chain->shape.Width;
@@ -318,7 +394,7 @@ static LONG converter_open(struct VCSession *session)
 	err = imports_make(session);
 	if (err != 0)
 	{
-		converter_close(session);
+		converter_retire(session); /* none of its frames went out: it closes */
 		return err;
 	}
 	chain->info_pending = TRUE;
@@ -486,8 +562,8 @@ static enum poll_result picture_send(struct VCSession *session, struct VCItem *i
  * @session: the session, its converter open
  * @item:    the client's item
  *
- * A frame and an event are the client's; a returned input frame is taken
- * back (import_returned()).
+ * A frame (noted: held_add()) and an event are the client's; a returned
+ * input frame is taken back (import_returned()).
  *
  * Return: what the poll gave.
  */
@@ -497,6 +573,8 @@ static enum poll_result converter_poll(struct VCSession *session, struct VCItem 
 	struct Library *VCBackendBase = chain->converter_backend->library;
 	if (VCB_Poll(chain->converter, item) == 0)
 		return POLL_NOTHING;
+	if (item->Type == VCIT_Frame)
+		held_add(chain, item->u.Frame);
 	if (item->Type == VCIT_Frame || item->Type == VCIT_Event)
 		return POLL_FOR_CLIENT;
 	if (item->Type == VCIT_FrameReturned)
@@ -617,16 +695,25 @@ struct VCFrame *chain_import_frame(struct VCSession *session, APTR data)
 }
 
 /**
- * chain_release_frame() - Give the converter one of its output frames back (VC_ReleaseFrame()).
+ * chain_release_frame() - Give a converter one of its output frames back (VC_ReleaseFrame()).
  * @session: the session
  * @frame:   the frame
+ *
+ * The frame goes to the converter it came from; one of an old shape closes
+ * with the last of its frames.  A frame not noted goes to the current one.
  */
 void chain_release_frame(struct VCSession *session, struct VCFrame *frame)
 {
 	struct vc_chain *chain = session->chain;
 	struct Library *VCBackendBase = chain->converter_backend->library;
-	if (chain->converter != NULL)
-		VCB_ReleaseFrame(chain->converter, frame);
+	APTR converter = held_take(chain, frame);
+	if (converter == NULL)
+		converter = chain->converter;
+	if (converter == NULL)
+		return;
+	VCB_ReleaseFrame(converter, frame);
+	if (converter != chain->converter && !held_from(chain, converter))
+		VCB_CloseSession(converter);
 }
 
 /**
@@ -711,14 +798,25 @@ LONG chain_set_attrs(struct VCSession *session, struct VCSessionParams *params)
 }
 
 /**
- * chain_close() - Close the converter, if open, and free the chain; the decoder is the caller's.
+ * chain_close() - Close every converter and free the chain; the decoder is the caller's.
  * @base:    the library base
  * @session: the session, its chain set; its decoder open, or not yet (a failed open)
+ *
+ * The client's frames go with the session, so the converters kept open
+ * for them close too.
  */
 void chain_close(struct VideoCodecBase *base, struct VCSession *session)
 {
 	struct ExecBase *SysBase = base->SysBase;
-	converter_close(session);
-	FreeMem(session->chain, sizeof(*session->chain));
+	struct vc_chain *chain = session->chain;
+	struct Library *VCBackendBase = chain->converter_backend->library;
+	converter_retire(session);
+	while (chain->held_count != 0)
+	{
+		APTR converter = chain->held[0].converter;
+		held_forget(chain, converter);
+		VCB_CloseSession(converter);
+	}
+	FreeMem(chain, sizeof(*chain));
 	session->chain = NULL;
 }

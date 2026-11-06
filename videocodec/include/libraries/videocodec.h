@@ -173,7 +173,10 @@
  *   converter behind it, inside the same session: the decoder runs natively,
  *   the converter (opened when the stream's shape is known) makes your
  *   format, size and place, and you see its frames and the decoder's packets.
- *   VC_ImportFrame() of output frames works once VCEV_StreamInfo came.
+ *   VC_ImportFrame() of output frames works once VCEV_StreamInfo came.  A new
+ *   shape brings a new converter with its VCEV_StreamInfo: frames you hold
+ *   stay valid until you release them, and frames you imported are imported
+ *   again.
  */
 #ifndef LIBRARIES_VIDEOCODEC_H
 #define LIBRARIES_VIDEOCODEC_H
@@ -514,8 +517,8 @@ struct VCSession; /* opaque */
 #define VCA_Kind (VCA_Base + 2)      /* VCK_*, required */
 #define VCA_CodecTag (VCA_Base + 40) /* VC_FOURCC() the container names the codec by: picks among its forms, so that a row of
                                      * another form (VCCodecInfo.Tag) is not chosen [0: the codec's every form]; the open's only */
-#define VCA_SigMask (VCA_Base + 19)  /* signal bits to Signal() when something is ready [none: poll yourself] */
-#define VCA_SigTask (VCA_Base + 18)  /* struct Task * to signal [the opener] */
+#define VCA_SigMask (VCA_Base + 19)  /* signal bits to Signal() when something is ready [none: poll yourself]; also with VC_SetAttrsTags() */
+#define VCA_SigTask (VCA_Base + 18)  /* struct Task * to signal [the opener]; also with VC_SetAttrsTags(), to hand the session to another task */
 #define VCA_ErrorPtr (VCA_Base + 32) /* LONG *: gets the VCERR_* when an open or an image call fails */
 #define VCA_Backend (VCA_Base + 31)  /* STRPTR: this backend, by its VCCodecInfo.Backend name, with or without .codec [the one with the codec's highest-priority row] */
 

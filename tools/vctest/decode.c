@@ -16,7 +16,16 @@
  * the session with it as VCA_CodecTag.  NOPTS
  * (with FRAMED) sends the access units without timestamps, NORATE opens the
  * session without a frame rate, PACKET n sets the size of an input packet
- * (the backend imports them from 512 KiB on).  HASHES prints every frame's
+ * (the backend imports them from 512 KiB on).  KEEP holds each picture
+ * until the next comes, as a player shows one while the next is made: the
+ * held one must not change meanwhile (keep.changed), and the fewest and
+ * most sessions open across the backends while one is held are noted
+ * (keep.sessions_min, keep.sessions_max: a chain keeps its old converter
+ * open for a held picture of an old shape, one session more).
+ * RESIGNAL n moves the session to another signal bit after n frames
+ * (VC_SetAttrsTags(VCA_SigMask)) and from then on waits for that bit only:
+ * a backend that kept signalling the old one stalls the decode until it
+ * fails as idle.  HASHES prints every frame's
  * hash (frame.N.md5), for a host that matches frames by content when a
  * damaged stream loses some.  OUT writes the frames: I420's planes as
  * ffmpeg's rawvideo packs them, a column frame whole, a packed format's
@@ -46,7 +55,7 @@
 
 const char decode_template[] =
     "FILE/A,REF/K,OUT/K,FRAMES/N,NOHASH/S,ENCODING/K,VERBOSE/S,FRAMED/S,FPS/N,OUTFORMAT/K,FLUSH/N,BACKEND/K,EXTRADATA/S,PAD/N,NOPTS/S,NORATE/S,PACKET/N,"
-    "HASHES/S,CONFIG/K,TAG/K";
+    "HASHES/S,CONFIG/K,TAG/K,KEEP/S,RESIGNAL/N";
 
 enum
 {
@@ -69,12 +78,15 @@ enum
 	ARG_PACKET,
 	ARG_HASHES,
 	ARG_CONFIG,
-	ARG_TAG
+	ARG_TAG,
+	ARG_KEEP,
+	ARG_RESIGNAL
 };
 
 #define DECODE_PACKETS 4               /* the session's input packets */
 #define FLUSH_PTS ((VCTime)1000000000) /* FLUSH: the restarted stream's timestamps, 1000 s on */
 #define NO_LIMIT 0xffffffffu
+#define KEEP_ROW_STEP 16u /* KEEP sums every 16th row: enough to see a picture written over */
 
 struct decode
 {
@@ -112,6 +124,14 @@ struct decode
 	BOOL flushed;
 	struct VCPacket *idle[DECODE_PACKETS]; /* packets the session handed back with nothing left to send */
 	ULONG idle_n;
+	/* KEEP: each picture held until the next comes */
+	BOOL keep;
+	struct VCFrame *held;
+	ULONG held_sum, keep_changed, keep_sessions_min, keep_sessions_max;
+	/* RESIGNAL: the session moved to another signal bit after resignal_at frames */
+	ULONG resignal_at;
+	BOOL resignaled;
+	LONG resignal_rc;
 };
 
 /**
@@ -714,6 +734,103 @@ static ULONG codec_of(const char *name, const char *file)
 }
 
 /**
+ * picture_sum() - A sum of a picture's visible bytes: every KEEP_ROW_STEP'th row, a packed picture's or an I420 one's luma.
+ * @d: the decode
+ * @f: the frame
+ *
+ * Return: the sum; 0 for a column frame, which KEEP does not check.
+ */
+static ULONG picture_sum(const struct decode *d, const struct VCFrame *f)
+{
+	if (d->outfmt == VCF_NV12_COL128)
+		return 0;
+	ULONG bpp = d->outfmt == VCF_I420 ? 1u : packed_bytes(d->outfmt);
+	ULONG row_bytes = (ULONG)f->Crop.Width * bpp;
+	const UBYTE *plane = (const UBYTE *)f->Data + f->Offset[0] + (ULONG)f->Crop.X * bpp;
+	ULONG sum = 0;
+	for (LONG y = f->Crop.Y; y < f->Crop.Y + f->Crop.Height; y += (LONG)KEEP_ROW_STEP)
+	{
+		const UBYTE *row = plane + (ULONG)y * f->Pitch[0];
+		for (ULONG i = 0; i < row_bytes; i++)
+			sum = ((sum << 1) | (sum >> 31)) + row[i];
+	}
+	return sum;
+}
+
+/**
+ * sessions_open() - The sessions open across every backend (VCInfo.Sessions).
+ *
+ * Return: their sum.
+ */
+static ULONG sessions_open(void)
+{
+	ULONG sum = 0;
+	for (ULONG n = 0;; n++)
+	{
+		struct VCInfo vi;
+		memset(&vi, 0, sizeof(vi));
+		vi.Size = sizeof(vi);
+		if (VC_GetBackendInfo(n, &vi) != 0)
+			return sum;
+		sum += vi.Sessions;
+	}
+}
+
+/**
+ * keep_release() - KEEP: the picture held checked, the sessions open noted, then released.
+ * @d: the decode
+ */
+static void keep_release(struct decode *d)
+{
+	if (d->held == NULL)
+		return;
+	if (picture_sum(d, d->held) != d->held_sum)
+		d->keep_changed++;
+	ULONG open = sessions_open();
+	if (open < d->keep_sessions_min)
+		d->keep_sessions_min = open;
+	if (open > d->keep_sessions_max)
+		d->keep_sessions_max = open;
+	VC_ReleaseFrame(d->s, d->held);
+	d->held = NULL;
+}
+
+/**
+ * keep_frame() - KEEP: hold a picture until the next comes, the one held before released.
+ * @d: the decode
+ * @f: the picture just handled
+ */
+static void keep_frame(struct decode *d, struct VCFrame *f)
+{
+	keep_release(d);
+	d->held = f;
+	d->held_sum = picture_sum(d, f);
+}
+
+/**
+ * decode_resignal() - RESIGNAL: the session told to signal another bit, the waiter moved to it.
+ * @d: the decode
+ *
+ * The old bit is freed: no wait looks at it again.
+ */
+static void decode_resignal(struct decode *d)
+{
+	struct waiter *w = &d->t->waiter;
+	BYTE sig = AllocSignal(-1);
+	d->resignaled = TRUE;
+	kv_unum("resignal.at", d->frames);
+	if (sig == -1)
+	{
+		kv_str("fail", "no second signal");
+		d->failed = TRUE;
+		return;
+	}
+	d->resignal_rc = VC_SetAttrsTags(d->s, VCA_SigMask, 1UL << sig, TAG_DONE);
+	FreeSignal(w->sig);
+	w->sig = sig;
+}
+
+/**
  * decode_loop() - Collect, feed, wait, until the end, a failure or FRAMES.
  * @d: the decode
  */
@@ -734,9 +851,14 @@ static void decode_loop(struct decode *d)
 					note("frame back: %ldx%ld, pts %lu, flags %lx\n", it.u.Frame->Crop.Width, it.u.Frame->Crop.Height, (ULONG)it.u.Frame->Pts,
 					     it.u.Frame->Flags);
 				handle_frame(d, it.u.Frame);
-				VC_ReleaseFrame(d->s, it.u.Frame);
+				if (d->keep)
+					keep_frame(d, it.u.Frame);
+				else
+					VC_ReleaseFrame(d->s, it.u.Frame);
 				if (d->flush_at != 0 && !d->flushed && d->frames >= d->flush_at)
 					decode_flush(d);
+				if (d->resignal_at != 0 && !d->resignaled && d->frames >= d->resignal_at)
+					decode_resignal(d);
 				break;
 			case VCIT_Event:
 				handle_event(d, &it.u.Event);
@@ -804,6 +926,20 @@ static int decode_summary(struct decode *d, u32 total)
 		else if (count_differs)
 			why = "the frame count differs from the reference";
 	}
+	if (d->keep)
+	{
+		kv_unum("keep.changed", d->keep_changed);
+		kv_unum("keep.sessions_min", d->keep_sessions_min);
+		kv_unum("keep.sessions_max", d->keep_sessions_max);
+		if (why == NULL && d->keep_changed != 0)
+			why = "a held picture changed while it was held";
+	}
+	if (d->resignal_at != 0)
+	{
+		kv_num("resignal.rc", d->resignal_rc);
+		if (why == NULL && (!d->resignaled || d->resignal_rc != 0))
+			why = "the session was not moved to the other signal";
+	}
 	if (d->flush_at != 0)
 	{
 		kv_unum("flush.frames", d->after_flush);
@@ -849,6 +985,9 @@ int do_decode(struct tool *t, LONG *args)
 	d.outfmt = outfmt_name != NULL ? format_of_name(outfmt_name) : VCF_I420;
 	d.hash = args[ARG_NOHASH] == 0 && (d.outfmt == VCF_I420 || d.outfmt == VCF_NV12_COL128);
 	d.flush_at = arg_num(args, ARG_FLUSH, 0);
+	d.keep = args[ARG_KEEP] != 0;
+	d.keep_sessions_min = NO_LIMIT;
+	d.resignal_at = arg_num(args, ARG_RESIGNAL, 0);
 	t->backend = arg_str(args, ARG_BACKEND);
 	md5_init(&d.in_md5);
 	ULONG codec = codec_of(arg_str(args, ARG_ENCODING), file);
@@ -967,6 +1106,7 @@ int do_decode(struct tool *t, LONG *args)
 	}
 	u32 t_start = get_time();
 	decode_loop(&d);
+	keep_release(&d);
 	rc = decode_summary(&d, get_time() - t_start);
 	VC_CloseSession(d.s);
 	d.s = NULL;

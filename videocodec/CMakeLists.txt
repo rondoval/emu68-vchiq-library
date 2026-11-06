@@ -21,16 +21,20 @@ configure_file(include/libraries/videocodec.h ${VIDEOCODEC_PUBLIC_INCLUDE_DIR}/l
 configure_file(include/libraries/videocodec_backend.h ${VIDEOCODEC_PUBLIC_INCLUDE_DIR}/libraries/videocodec_backend.h COPYONLY)
 add_library(videocodec_headers INTERFACE)
 target_include_directories(videocodec_headers INTERFACE
-    ${VIDEOCODEC_PUBLIC_INCLUDE_DIR}
-    ${VIDEOCODEC_GENERATED_INCLUDE_DIR}
+    $<BUILD_INTERFACE:${VIDEOCODEC_PUBLIC_INCLUDE_DIR}>
+    $<BUILD_INTERFACE:${VIDEOCODEC_GENERATED_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:include>
 )
 add_dependencies(videocodec_headers videocodec_sfd_headers)
+set_target_properties(videocodec_headers PROPERTIES EXPORT_NAME headers) # VideoCodec::headers
 
 add_executable(videocodec_library
     src/videocodec_lib.c
     src/videocodec_backend.c
+    src/videocodec_chain.c
     src/videocodec_session.c
     src/videocodec_image.c
+    src/videocodec_tags.c
     ${VCHIQ_SHARED_DIR}/image_info.c
 )
 target_compile_definitions(videocodec_library PRIVATE
@@ -61,3 +65,30 @@ set_target_properties(videocodec_library PROPERTIES
 install(TARGETS videocodec_library RUNTIME DESTINATION LIBS)
 install(FILES include/libraries/videocodec.h include/libraries/videocodec_backend.h DESTINATION include/libraries)
 install(DIRECTORY ${VIDEOCODEC_GENERATED_INCLUDE_DIR}/ DESTINATION include)
+
+# The CMake package a backend built outside this repository finds
+# (find_package(VideoCodec)): the headers above as VideoCodec::headers, and the
+# tools' output grammar as VideoCodec::kv (tools/CMakeLists.txt puts it in the
+# same export set).  Nothing of the library's internals.
+install(TARGETS videocodec_headers EXPORT VideoCodecTargets)
+install(EXPORT VideoCodecTargets
+    NAMESPACE VideoCodec::
+    FILE VideoCodecTargets.cmake
+    DESTINATION lib/cmake/VideoCodec
+)
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VideoCodecConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/VideoCodecConfig.cmake
+    INSTALL_DESTINATION lib/cmake/VideoCodec
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/VideoCodecConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/VideoCodecConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/VideoCodecConfigVersion.cmake
+    DESTINATION lib/cmake/VideoCodec
+)

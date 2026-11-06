@@ -73,11 +73,17 @@ VC_CloseSession(s);
 | `VCK_Converter` | frames | frames | `VCC_Raw` |
 
 An encoder or converter reads the formats of its `VCCodecInfo.InputFormats`
-and refuses others at the open with `VCERR_UNSUPPORTED`; the converter's are the
-ones it writes and a camera's `VCF_YUYV` and `VCF_NV12`. `OutputFormats` says
-what a row writes: 0 for an encoder. NV12 goes as a camera sends it, the UV rows right
-after the picture's own; I420 keeps whole 16 rows. `VC_ConvertImage()` takes the
-same. The VideoCore reads YUV as full-range BT.601 whatever it is told, so a
+and refuses others at the open with `VCERR_UNSUPPORTED`. `OutputFormats` says
+what a row writes: 0 for an encoder. videocore.codec's converter reads and
+writes the six RGB and I420 formats, the four packed 4:2:2 orders (`YUYV`,
+`UYVY`, `YVYU`, `VYUY`), `NV12`, `NV21`, planar 4:2:2 (`I422`) and the 32-bit
+RGB formats without alpha (`RGBX32`, `BGRX32`); it writes `YV12` too, and reads
+the H.265 decoder's columns (`NV12_COL128`). The rest of the `VCF_*` list
+(`ARGB32`, `ABGR32`, the big-endian and 15-bit RGB formats, `CLUT8`, the
+10-bit columns, `YV12` in) is there for codec drivers to come; this one
+refuses them. NV12 and NV21 go as a camera sends them, the chroma rows right
+after the picture's own, in and out; I420, YV12 and I422 keep whole 16 rows.
+`VC_ConvertImage()` takes the same. The VideoCore reads YUV as full-range BT.601 whatever it is told, so a
 camera's video-range picture (16 to 235) comes out with its blacks at 16 and its
 whites at 235: a little flat, nothing lost.
 
@@ -266,13 +272,32 @@ let them go when a picture would not fit.
 upward until it fails): codec, kind, size limit, `MaxLevel`, pixel formats
 (`OutputFormats`, a mask: `info.OutputFormats & VCF_MASK(VCF_RGB16)`), the backend's
 name, the row's priority and what it serves (`Flags`: `VCCF_Session`,
-`VCCF_Image`).
+`VCCF_Image`), and `Tag`, the one form of the codec the row serves (below).
 
 A session goes to the row of the highest priority for its codec and kind that
-serves sessions, an image call to one that serves image calls. Pass
+serves sessions, an image call to one that serves image calls; of those, a
+row that takes the pictures asked for wins (an encoder's or converter's input
+format, a converter's output format), so a second converter of lower priority
+gets what the first cannot do. When no row takes them, the best row gets the
+call anyway and refuses it with its own error. Pass
 `VCA_Backend` with a row's `Backend` name (with or without `.codec`) to pick
 one yourself. No row, no backend: `VCERR_NOBACKEND` (a session for a still
 picture's codec, say).
+
+**FourCCs.** A container names its codec by a FourCC: AVI's
+`biCompression`, an MP4 or QuickTime sample entry, Matroska's
+`V_MS/VFW/FOURCC`. `VC_CodecOfTag(fourcc)` gives the `VCC_*` of one
+(`VC_FOURCC('X','V','I','D')` is `VCC_MPEG4`, `hvc1` and `hev1` are
+`VCC_H265`), or `VCC_None`; case does not count. Pass the FourCC with the
+session as `VCA_CodecTag`. Where one codec has forms that are different
+bitstreams (MS-MPEG4 v1 to v3, VC-1's `WMV3` and `WVC1`, H.263 and Sorenson
+Spark), a backend may serve only some: its rows then carry those forms'
+FourCCs in `Tag`, and a session goes to such a row only when its
+`VCA_CodecTag` names that form. A row whose `Tag` is 0 serves every form,
+and between rows of equal priority one of the session's own FourCC wins.
+`VC_CodecOfTag()` and `VCA_CodecTag` are new in 0.5: call the one only when
+the library's `lib_Version` is above 0 or its `lib_Revision` is 5 or more (an
+older library ignores the tag).
 
 `VC_GetBackendInfo(index, &info)` reports each backend's state: its sessions,
 codecs and `MemTotal`/`MemFree`, the hardware's own memory its codecs allocate
@@ -294,7 +319,9 @@ A backend is an Exec library named `<name>.codec`, installed in
 `LIBS:videocodec/`. It implements the `VCB_*` function table of
 `sfd/videocodec_backend.sfd` (arguments in registers, base in A6); the
 header's opening comment states the contract, and architecture.md 5.2 how
-backends are found and chosen. `videocore/` is the reference implementation.
+backends are found and chosen. `videocore/` is the reference implementation;
+`tests/swconv/swconv.c`, a software converter the suite installs for one test,
+is the smallest whole backend: one row, image calls only.
 
 * `VCB_GetInfo()` is called first and must report `VCB_ABI_VERSION` and
   `VCInfo.Codecs`, the number of rows `VCB_QueryCodec()` answers. A backend
@@ -302,7 +329,9 @@ backends are found and chosen. `videocore/` is the reference implementation.
 * Every codec row carries a `Priority`: `VCB_PRIORITY_HARDWARE` (50) for
   dedicated hardware, `VCB_PRIORITY_SOFTWARE` (0) for the 68k doing the work;
   and `Flags`: whether it serves sessions (`VCCF_Session`), image calls
-  (`VCCF_Image`) or both.
+  (`VCCF_Image`) or both. A row for one form of a codec only gives its
+  FourCC in `Tag`, one row per form (2.5); 0 serves every form. The session's
+  FourCC reaches the backend as `VCSessionParams.CodecTag` (ABI 1.1).
 * `VCB_OpenSession()` receives a `struct VCSessionParams`, the frontend's
   parse of the client's tags; a backend never sees a tag. `Changed` marks
   what a `VCB_SetAttrs()` carries.
@@ -432,8 +461,11 @@ cure.
 
 `COMPONENTS` opens a `"mmal"` service of its own. The firmware lists no
 components, so a fixed set of names is tried; each one found is created, its
-ports read (format, buffer needs, `SUPPORTED_ENCODINGS`) and destroyed at once,
-never enabled.
+ports read (format, buffer needs, `SUPPORTED_ENCODINGS`, as many as one
+parameter carries: 96) and destroyed at once, never enabled. A port that lists
+nothing gets each pixel encoding committed in turn, and the line `commits`
+names those it took (`-` before one it refused): taking a format is not
+converting it right, which `tests/test_formats.py` checks.
 
 ### 6.2 VCPlay and VCShow
 
@@ -460,7 +492,7 @@ command's source say what the arguments do.
 | Command | Does | Facts |
 |---|---|---|
 | `STATUS` | vchiq.device's connection, the Pi's timer and every backend's state and counters | `vchiq.*`, `timer.now`, `backend.N.*` |
-| `CODECS` | the codec table | `codec.N.*` |
+| `CODECS` | the codec table; `OF fourcc ...` the library's codec of each FourCC (`VC_CodecOfTag()`) | `codec.N.*`, `of.N.*` |
 | `MARK text` | a line in the debug log, the capture's self-test | |
 | `ABANDON` | leaves the session as a crash in mid-flight would, for the repair test; needs the test hooks (8.2) | `abandon.*` |
 | `AUDIO` | silence or a tone through the firmware's audio service, driven directly; `DEST` 1 the jack, 2 HDMI0, 3 HDMI1 | `run.N.*`, `stop.N.*`, `pins.*` |
@@ -475,7 +507,7 @@ command's source say what the arguments do.
 | `SCREEN` | a Picasso96 screen to record: the colour bars and a moving block, or `NOISE`; `BACK n` steps it behind the others after n seconds, for three; `NATIVE` or `DEPTH 8` a screen VCGrab must refuse | `screen.*` |
 
 `DECODE`'s `OUT` writes the frames raw, the input of `TOJPEG`, `CONVERT` and
-`ENCODE`; `PACKET n` sets the size of an input packet, and from 512 KiB on the
+`ENCODE`; `TAG fourcc` opens the session with it as `VCA_CodecTag`; `PACKET n` sets the size of an input packet, and from 512 KiB on the
 backend imports them (`SMEM`). `MISALIGN` puts the image calls' pictures 4
 bytes past a cache line, so the VPU cannot write them. `BACKEND name` runs any
 of the codec commands on that backend.
@@ -700,6 +732,8 @@ the install reboot must log `[vchiq] up:` on a debug build, or the run stops.
 | `test_decoder.py` | bit-exact decodes, the backend named or refused, the decoder's rate, two at once, a JPEG through the video decoder, flush and replay, the shape change, the pixel aspect |
 | `test_players.py` | VPUPlay full screen and in a window, the colour bars, LOOP, two players, an empty stream, the shape change and pixel aspect on screen; VCPlay |
 | `test_images.py` | the image calls: decode, convert, encode; every still format, refusals, cut and big pictures, the headers; VCShow; a camera's YUYV and NV12 through the converter, a converter session's rate, an input format it refuses |
+| `test_formats.py` | every further pixel format the converter offers, in and out, against ffmpeg's conversion; the ones it does not, refused |
+| `test_choice.py` (reboot) | the backend chosen by the pictures asked for: `tests/swconv/`, a software converter built only for the suite, put in `LIBS:videocodec/` for the module |
 | `test_encoder.py` | thirty pictures with key frames, a key frame on request; RGB through the ISP: each format, scaled, gaps in the times, the end mark alone, a refused bit rate, closing while stalled, noise |
 | `test_vcgrab.py` | VCGrab judged from its files: the bars as a player shows them, every pixel format through the ISP, scaling, refusals, a minute of 1080p, noise at the highest bit rate, stepping back, Ctrl-C at any moment, stills, the hot keys, playback through the VPU. With `VCGRAB_DISK=Stuff:` also the writing to that disk and a recording past 2 GiB and the stop near 4 GiB; with `VCGRAB_WRAP=1` a take across the Pi's timer wrap, up to 72 minutes' wait. Also a full disk, a screen closing, screens it must refuse, and takes beside a player, a decode, sound and a page of JPEGs |
 | `test_levels.py` | the H.264 limit probes: declared levels, reference frames, rates, sizes, profiles; MJPEG sizes against ffmpeg |

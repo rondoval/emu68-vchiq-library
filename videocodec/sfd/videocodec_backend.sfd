@@ -23,4 +23,5 @@ LONG VCB_Flush(APTR session) (A0)
 LONG VCB_SetAttrs(APTR session, struct VCSessionParams *params) (A0,A1)
 LONG VCB_Image(struct VCImageParams *params) (A0)
 VOID VCB_Idle() ()
+struct VCFrame *VCB_OutputFrame(APTR session, ULONG index) (A0,D0)
 ==end

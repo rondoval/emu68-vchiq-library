@@ -1,3 +1,36 @@
+# Release notes - emu68-vchiq-library 0.5
+
+- **More pixel formats through the VideoCore converter.** Besides I420, the RGB
+  formats, NV12 and YUYV, it now reads and writes NV21, planar 4:2:2 (I422), the
+  packed 4:2:2 orders UYVY, YVYU and VYUY, and 32-bit RGB without alpha (RGBX32,
+  BGRX32), and writes YV12: a camera's or a program's own pictures convert
+  without a copy through the 68k. Each was checked against ffmpeg's conversion.
+- **For programmers: more format numbers.** `libraries/videocodec.h` also names
+  ARGB32, ABGR32, the big-endian and 15-bit RGB formats of Picasso96, CLUT8 and
+  the 10-bit column format, for codec drivers to come; the VideoCore refuses them.
+- **For programmers: codecs by FourCC.** `VC_CodecOfTag()` tells which codec a
+  container's FourCC names (`XVID`, `hvc1`, `DIV3`, ...), so a player needs no
+  table of its own, and `VCA_CodecTag` passes it with a session, so that a
+  codec driver serving only some forms of a codec is chosen only for those.
+  `VCInfo CODECS` shows such a row's FourCC.
+- **For programmers: more codec numbers.** `libraries/videocodec.h` names
+  MPEG-1, MPEG-2, MPEG-4 Part 2, MS-MPEG4, H.263, VP8, VP9, AV1, VC-1,
+  Theora, Cinepak, Microsoft Video 1 and QuickTime Animation, each with how
+  its packets are cut and what its extradata holds, for codec drivers to come;
+  none decodes them yet.
+- **H.265 video shows on screen.** A decoder whose own pictures a program
+  cannot draw, the H.265 backend's column pictures, gets the VideoCore
+  converter placed behind it by `videocodec.library`: the program opens one
+  session, asks for the RGB format and size it wants, and gets them, as it
+  does for H.264. `VCTest DECODE` takes `.h265` files and the `H265` encoding
+  name.
+- **For programmers:** backend ABI 1.1 adds `VCB_OutputFrame()`, a session's
+  own output frames by index; the frontend imports them into the converter it
+  chains. Output frames can be imported into a chained session once
+  `VCEV_StreamInfo` came. The column format `VCF_NV12_COL128` is settled.
+
+---
+
 # Release notes - emu68-vchiq-library 0.4
 
 - **Camera pictures on the VideoCore.** The converter now takes a USB

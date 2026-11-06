@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+# VideoCodec::headers  the public API and the backend ABI (libraries/videocodec*.h,
+#                      the generated proto/inline/clib headers)
+# VideoCodec::kv       the test tools' output grammar and debug-log writer, for a
+#                      backend's own tools (kv.h, debugport.h)
+include("${CMAKE_CURRENT_LIST_DIR}/VideoCodecTargets.cmake")

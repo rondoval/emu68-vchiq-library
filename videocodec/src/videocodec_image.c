@@ -163,7 +163,15 @@ static LONG image_run(struct VideoCodecBase *base, struct VCImageParams *params,
 	struct ExecBase *SysBase = base->SysBase;
 	ObtainSemaphore(&base->lock);
 	vc_backends_load(base);
-	struct vc_backend *backend = vc_backend_for(base, params->Codec, params->Kind, name, VCCF_Image);
+	/* a compressed side has no format: a decoder's source, an encoder's destination */
+	struct vc_choice want = {
+	    .codec = params->Codec,
+	    .kind = params->Kind,
+	    .use = VCCF_Image,
+	    .reads = vc_format_mask(params->Source.Format),
+	    .writes = vc_format_mask(params->Dest.Format),
+	};
+	struct vc_backend *backend = vc_backend_choose(base, &want, name, NULL);
 	ReleaseSemaphore(&base->lock);
 	if (backend == NULL)
 		return VCERR_NOBACKEND;

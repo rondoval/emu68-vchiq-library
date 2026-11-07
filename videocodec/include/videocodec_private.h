@@ -118,7 +118,8 @@ struct vc_choice
 	ULONG reads;            /* VCF_MASK()s of the pictures to read, any one of them; 0 asks nothing */
 	ULONG writes;           /* VCF_MASK() of the picture to write; 0 asks nothing */
 };
-ULONG vc_format_mask(ULONG format); /* VCF_MASK(), 0 for none or past 31 */
+#define VC_FORMAT_BITS 32u           /* format numbers below this have a bit in a row's masks */
+ULONG vc_format_mask(ULONG format); /* VCF_MASK(), 0 for none or past the masks' bits */
 BOOL vc_row_takes(const struct VCCodecInfo *row, const struct vc_choice *want); /* reads and writes what is asked */
 /* the backend of a session, an image call or a chain's converter, with the row that won */
 struct vc_backend *vc_backend_choose(struct VideoCodecBase *base, const struct vc_choice *want, const char *name,
@@ -130,6 +131,8 @@ ULONG vc_tag_fold(ULONG tag); /* a FourCC's letters in upper case */
 /* videocodec_chain.c: a converter behind a decoder; chain_open() with base->lock held, the rest without (the backends serialise themselves) */
 struct vc_chain *chain_open(struct VideoCodecBase *base, struct VCSessionParams *params, const struct vc_backend *decoder,
                             const struct VCCodecInfo *row, LONG *err); /* NULL with *err 0: none needed */
+/* VCCodecInfo.ChainOutputFormats of a backend's row: what a chain behind its sessions adds; base->lock held */
+ULONG chain_output_formats(struct VideoCodecBase *base, const struct vc_backend *decoder, const struct VCCodecInfo *row);
 void chain_close(struct VideoCodecBase *base, struct VCSession *session); /* the converter and the chain; before the decoder's close */
 LONG chain_poll(struct VCSession *session, struct VCItem *item);
 struct VCFrame *chain_import_frame(struct VCSession *session, APTR data); /* an output frame: the converter's */

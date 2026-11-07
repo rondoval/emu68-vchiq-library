@@ -575,6 +575,21 @@ static int do_components(void)
 /* ---- CODECS ------------------------------------------------------------------ */
 
 /**
+ * formats_print() - One list of a codec row's formats: "; <what> <names>".
+ * @what:    what the row does with them: "writes", "reads"
+ * @formats: VCF_MASK()s; nothing is printed for 0
+ */
+static void formats_print(const char *what, ULONG formats)
+{
+	if (formats == 0)
+		return;
+	Printf((CONST_STRPTR) "; %s", what);
+	for (ULONG f = 0; f < FORMAT_BITS; f++)
+		if (formats & VCF_MASK(f))
+			Printf((CONST_STRPTR) " %s", format_name(f));
+}
+
+/**
  * do_codecs() - CODECS: every codec driver's codec rows.
  *
  * Return: RETURN_OK, RETURN_FAIL if there are none.
@@ -595,20 +610,11 @@ static int do_codecs(void)
 		Printf((CONST_STRPTR) " %s: up to %ldx%ld", kind_name(ci.Kind), ci.MaxWidth, ci.MaxHeight);
 		if (ci.MaxLevel != 0)
 			Printf((CONST_STRPTR) ", level %ld.%ld", ci.MaxLevel / 10u, ci.MaxLevel % 10u);
-		if (ci.OutputFormats != 0)
-		{
-			Printf((CONST_STRPTR) "; writes");
-			for (ULONG f = 0; f < 32; f++)
-				if (ci.OutputFormats & VCF_MASK(f))
-					Printf((CONST_STRPTR) " %s", format_name(f));
-		}
-		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, InputFormats) && ci.InputFormats != 0)
-		{
-			Printf((CONST_STRPTR) "; reads");
-			for (ULONG f = 0; f < 32; f++)
-				if (ci.InputFormats & VCF_MASK(f))
-					Printf((CONST_STRPTR) " %s", format_name(f));
-		}
+		formats_print("writes", ci.OutputFormats);
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, ChainOutputFormats))
+			formats_print("chained", ci.ChainOutputFormats);
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, InputFormats))
+			formats_print("reads", ci.InputFormats);
 		Printf((CONST_STRPTR) "; %s%s%s, priority %ld\n", ci.Backend, (ci.Flags & VCCF_Session) ? ", session" : "",
 		    (ci.Flags & VCCF_Image) ? ", image call" : "", ci.Priority);
 		n++;

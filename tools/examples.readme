@@ -7,13 +7,17 @@ videocodec.library's headers and Picasso96's.
 VCPlay - a video player
 -----------------------
 
-Plays an H.264 elementary stream (a .h264 file) in a window on the
-Workbench. One decoder session does the work: the VideoCore decodes, scales
-and converts each picture to the screen's pixel format, and VCPlay copies it
-into the window with p96WritePixelArray() when it is due. It shows the
-sessions: packets in, frames out, VC_Poll() and a signal.
+Plays an H.264 or H.265 elementary stream (a .h264 file, or a .h265, .hevc
+or .265 one) in a window on the Workbench. One decoder session does the work:
+the hardware decodes, the VideoCore scales and converts each picture to the
+screen's pixel format, and VCPlay copies it into the window with
+p96WritePixelArray() when it is due. It shows the sessions: packets in,
+frames out, VC_Poll() and a signal. H.265 needs rpivid.codec; its pictures
+reach the screen's format through a converter videocodec.library puts
+behind the decoder, which VC_QueryCodec() lists in ChainOutputFormats.
 
     VCPlay video.h264
+    VCPlay video.h265
 
 The close gadget, Ctrl-C or the end of the stream stops it.
 

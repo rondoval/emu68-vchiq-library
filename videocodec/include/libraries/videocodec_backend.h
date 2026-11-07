@@ -21,7 +21,8 @@
  * - It calls VCB_GetInfo() first.  A backend is kept only if it reports the
  *   ABI major of this header and VCInfo.Codecs, the number of rows
  *   VCB_QueryCodec() answers (index 0 to Codecs - 1).  The table is read
- *   once and cached.
+ *   once and cached.  VCCodecInfo.ChainOutputFormats is the frontend's to
+ *   fill: a backend leaves it 0.
  * - A session goes to the backend whose row for its codec and kind serves
  *   sessions (VCCF_Session) and has the highest VCCodecInfo.Priority
  *   (VCB_PRIORITY_*; ties by backend name), or to the one the program names

@@ -273,6 +273,12 @@ upward until it fails): codec, kind, size limit, `MaxLevel`, pixel formats
 (`OutputFormats`, a mask: `info.OutputFormats & VCF_MASK(VCF_RGB16)`), the backend's
 name, the row's priority and what it serves (`Flags`: `VCCF_Session`,
 `VCCF_Image`), and `Tag`, the one form of the codec the row serves (below).
+A decoder's row also lists, in `ChainOutputFormats`, the formats its
+sessions write through a converter the library puts behind the decoder
+(architecture.md 5.1): to choose a screen format before the open, look in
+`OutputFormats | ChainOutputFormats`, the decoder's own first, since the
+chain is a second session on the hardware. The H.265 decoder writes only its
+columns, so the screen's format comes from there.
 
 A session goes to the row of the highest priority for its codec and kind that
 serves sessions, an image call to one that serves image calls; of those, a
@@ -474,7 +480,9 @@ source and binary, with a `ReadMe` (`tools/examples.readme`) giving the
 one-line build. Each takes a file name, opens a window on the Workbench and
 uses nothing of the stack but the library's headers.
 
-`VCPlay file` is the example of sessions. `VCShow file` is the example of image
+`VCPlay file` is the example of sessions: an H.264 stream, or an H.265 one
+when the name ends in `.h265`, `.hevc` or `.265`, its format chosen as 2.5
+says. `VCShow file` is the example of image
 calls: `VC_GetImageInfo()` for the size, a window of that size (scaled down to
 fit the screen), one `VC_DecodeImageTags()` into a buffer in the screen's pixel
 format, then `p96WritePixelArray()`. A picture the hardware refuses
@@ -728,8 +736,8 @@ the install reboot must log `[vchiq] up:` on a debug build, or the run stops.
 | Module | What |
 |---|---|
 | `test_vcinfo.py` | VCInfo as a product: the summary, DUMP, GCMD, COMPONENTS, CODECS |
-| `test_device.py` | the connection up, the codec table, a bulk transfer to the audio service, resume after an expunge |
-| `test_decoder.py` | bit-exact decodes, the backend named or refused, the decoder's rate, two at once, a JPEG through the video decoder, flush and replay, the shape change, the pixel aspect |
+| `test_device.py` | the connection up, the codec table with what a chain adds, a bulk transfer to the audio service, resume after an expunge |
+| `test_decoder.py` | bit-exact decodes, the backend named or refused, the decoder's rate, two at once, a JPEG through the video decoder, flush and replay, a chain behind the decoder, the shape change, the pixel aspect |
 | `test_players.py` | VPUPlay full screen and in a window, the colour bars, LOOP, two players, an empty stream, the shape change and pixel aspect on screen; VCPlay |
 | `test_images.py` | the image calls: decode, convert, encode; every still format, refusals, cut and big pictures, the headers; VCShow; a camera's YUYV and NV12 through the converter, a converter session's rate, an input format it refuses |
 | `test_formats.py` | every further pixel format the converter offers, in and out, against ffmpeg's conversion; the ones it does not, refused |

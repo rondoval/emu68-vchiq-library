@@ -8,6 +8,8 @@ STILL_FORMATS = "I420,RGB16,RGB24,BGR24,BGRA32,RGBA32"
 # the ISP's own, a camera's, the column format and the formats tests/test_formats.py proves
 CONVERTER_READS = "I420,NV12,RGB16,RGB24,BGR24,BGRA32,RGBA32,YUYV,UYVY,NV12_COL128,NV21,I422,YVYU,VYUY,RGBX32,BGRX32"
 CONVERTER_WRITES = "I420,YV12,NV12,RGB16,RGB24,BGR24,BGRA32,RGBA32,YUYV,UYVY,NV21,I422,YVYU,VYUY,RGBX32,BGRX32"
+# what the converter adds behind a decoder that writes STILL_FORMATS itself (VCCodecInfo.ChainOutputFormats)
+DECODER_CHAINED = "YV12,NV12,YUYV,UYVY,NV21,I422,YVYU,VYUY,RGBX32,BGRX32"
 VIDEOCORE_ROWS = 11
 
 
@@ -23,14 +25,17 @@ def test_connection_up(device, record_property):
 
 @pytest.mark.smoke
 def test_codec_table(device):
-    """VCTest CODECS: eleven rows; the streams on sessions, the stills on image calls, every still decoder in six formats, the converter reading a camera's too."""
+    """VCTest CODECS: eleven rows; the streams on sessions, the stills on image calls, every still decoder in six formats, the converter reading a camera's too;
+    the stream decoders adding the converter's other formats through a chain, no other row any."""
     r = vctest(device, "CODECS", 30)
     assert r.passed, r.kv.get("fail")
     rows = [c for c in r.group("codec") if c["backend"] == "videocore.codec"]  # other codec drivers add rows of their own
     assert len(rows) == VIDEOCORE_ROWS, f"{len(rows)} codec rows"
     by_name = {(c["name"], c["kind"]): c for c in rows}
     for name in ("H264", "MJPEG"):
-        assert by_name[(name, "decoder")]["session"] == "yes", f"{name} decoder: no sessions"
+        decoder = by_name[(name, "decoder")]
+        assert decoder["session"] == "yes", f"{name} decoder: no sessions"
+        assert decoder.get("chain_output_formats") == DECODER_CHAINED, f"{name} decoder chains {decoder.get('chain_output_formats')}"
     assert by_name[("H264", "encoder")]["session"] == "yes"
     assert int(by_name[("H264", "decoder")]["level"]) == 42, "the H.264 decoder's level is not 4.2"
     assert int(by_name[("H264", "encoder")]["level"]) == 40, "the H.264 encoder's level is not 4.0"
@@ -47,6 +52,8 @@ def test_codec_table(device):
         encoder = by_name[(name, "encoder")]
         assert encoder.get("input_formats") == reads and "output_formats" not in encoder, f"{name} encoder: {encoder}"
     assert not [c for c in rows if c["kind"] == "decoder" and "input_formats" in c], "input formats on a decoder's row"
+    chaining = [(c["name"], c["kind"]) for c in rows if "chain_output_formats" in c]
+    assert sorted(chaining) == [("H264", "decoder"), ("MJPEG", "decoder")], f"chained formats on {chaining}"
 
 
 @pytest.mark.smoke

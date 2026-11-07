@@ -7,7 +7,8 @@
  * format, size, place and aspect.  The converter is opened when the
  * stream's shape arrives, with that shape on its input; the decoder's
  * frames, listed by VCB_OutputFrame(), become its input frames by import
- * before its first send, so no pixel is copied.
+ * before its first send, so no pixel is copied.  What a chain would add to
+ * a decoder's formats is reported by the same rule (chain_output_formats()).
  *
  * The pump runs inside VC_Poll(), in the client's task: the decoder's
  * frames go into the converter, the converter's returned input frames go
@@ -73,6 +74,20 @@ enum poll_result
 /* ---- the open ----------------------------------------------------------------------- */
 
 /**
+ * row_chains() - Whether a converter may be put behind a row's sessions.
+ * @row: the row
+ *
+ * A decoder's row that serves sessions and names the formats it writes; one
+ * that names none writes them all, and needs no converter.
+ *
+ * Return: TRUE when it may.
+ */
+static BOOL row_chains(const struct VCCodecInfo *row)
+{
+	return row->Kind == VCK_Decoder && (row->Flags & VCCF_Session) != 0 && row->OutputFormats != 0;
+}
+
+/**
  * converter_for() - The converter backend that joins a decoder's output to the format asked.
  * @base:    the library base, lock held, list loaded
  * @decoder: the decoder's backend
@@ -102,6 +117,32 @@ static struct vc_backend *converter_for(struct VideoCodecBase *base, const struc
 }
 
 /**
+ * chain_output_formats() - The formats a converter behind a row's sessions adds (VCCodecInfo.ChainOutputFormats).
+ * @base:    the library base, lock held, list loaded
+ * @decoder: the row's backend
+ * @row:     the row
+ *
+ * Asks converter_for() of each format the row does not write, so the answer
+ * is the one chain_open() would give.
+ *
+ * Return: VCF_MASK()s of the formats a chain would write; 0 for a row whose
+ * sessions get none.
+ */
+ULONG chain_output_formats(struct VideoCodecBase *base, const struct vc_backend *decoder, const struct VCCodecInfo *row)
+{
+	ULONG formats = 0;
+	if (!row_chains(row))
+		return formats;
+	for (ULONG format = 0; format < VC_FORMAT_BITS; format++)
+	{
+		ULONG asked = vc_format_mask(format);
+		if (asked != 0 && (row->OutputFormats & asked) == 0 && converter_for(base, decoder, row, asked) != NULL)
+			formats |= asked;
+	}
+	return formats;
+}
+
+/**
  * chain_open() - The chain a session needs, if any.
  * @base:    the library base, lock held, list loaded
  * @params:  the session's parameters; with a chain, the decoder's: its native output
@@ -122,7 +163,7 @@ struct vc_chain *chain_open(struct VideoCodecBase *base, struct VCSessionParams 
 {
 	*err = 0;
 	ULONG asked = vc_format_mask(params->OutputFormat);
-	if (params->Kind != VCK_Decoder || params->OutputFormat == 0 || row->OutputFormats == 0 || (row->OutputFormats & asked) != 0)
+	if (!row_chains(row) || params->OutputFormat == 0 || (row->OutputFormats & asked) != 0)
 		return NULL;
 	struct vc_backend *converter = converter_for(base, decoder, row, asked);
 	if (converter == NULL)

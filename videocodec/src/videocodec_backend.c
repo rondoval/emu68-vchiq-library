@@ -85,8 +85,9 @@ static struct vc_backend *backend_by_name(struct VideoCodecBase *base, const cha
  * @backend: the backend; @backend->library and @backend->name set
  * @rows:    the rows it has, as VCB_GetInfo() reported (VCInfo.Codecs)
  *
- * Rows are kept as the backend gave them; the backend name is written when
- * a row is handed out, by VC_QueryCodec().  At most VC_CAPS_MAX rows are read; a backend that
+ * Rows are kept as the backend gave them; the backend name and what a chain
+ * adds (ChainOutputFormats) are written when a row is handed out, by
+ * VC_QueryCodec().  At most VC_CAPS_MAX rows are read; a backend that
  * answers fewer than it reported keeps the rows it gave (@backend->ncaps
  * counts them).
  *
@@ -368,12 +369,12 @@ void vc_backends_load(struct VideoCodecBase *base)
  * vc_format_mask() - A format's bit in a row's format masks.
  * @format: VCF_*, 0 for none
  *
- * Return: VCF_MASK(@format); 0 for none, and for a number past the masks' 32
- * bits, which no row can hold.
+ * Return: VCF_MASK(@format); 0 for none, and for a number past the masks'
+ * VC_FORMAT_BITS bits, which no row can hold.
  */
 ULONG vc_format_mask(ULONG format)
 {
-	return format != 0 && format < 32u ? VCF_MASK(format) : 0u;
+	return format != 0 && format < VC_FORMAT_BITS ? VCF_MASK(format) : 0u;
 }
 
 /**
@@ -486,8 +487,9 @@ struct vc_backend *vc_backend_choose(struct VideoCodecBase *base, const struct v
  * @base:  the library base (A6)
  *
  * Copies the row into @info up to the smaller of the caller's Size and the
- * library's, then the backend's file name into Backend (for VCA_Backend),
- * if the caller's structure has it.  Size ends up as what was copied.
+ * library's, then the backend's file name into Backend (for VCA_Backend) and
+ * what a chain adds into ChainOutputFormats (chain_output_formats()), as far
+ * as the caller's structure has them.  Size ends up as what was copied.
  *
  * Return: 0, or VCERR_BADPARAM past the last row or for a bad @info.
  */
@@ -510,6 +512,8 @@ LONG VC_QueryCodec(ULONG index asm("d0"), struct VCCodecInfo *info asm("a0"), st
 			info->Size = size;
 			if (VC_HAS_FIELD(size, struct VCCodecInfo, Backend))
 				strlcpy((char *)info->Backend, backend->name, sizeof(info->Backend));
+			if (VC_HAS_FIELD(size, struct VCCodecInfo, ChainOutputFormats))
+				info->ChainOutputFormats = chain_output_formats(base, backend, &backend->caps[index]);
 			rc = 0;
 		}
 		else

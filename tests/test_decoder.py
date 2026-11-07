@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
-"""The H.264 and MJPEG decoder through VCTest DECODE: bit-exact decodes, refusals, speed, two clients, flush, shapes."""
+"""The H.264 and MJPEG decoder through VCTest DECODE: bit-exact decodes, refusals, speed, two clients, flush, shapes, a chain."""
+import numpy as np
 import pytest
 
+from harness.material import ffmpeg
+from harness.pictures import psnr, y_planes
 from harness.tools import assert_nothing_left, vctest
+
+CHAINED_LEAST_DB = 40.0  # the chain's luma against ffmpeg's: the converter only repacks it, a wrong picture scores 10 to 15
 
 
 def decode(device, material, clip, extra="", ref=True, timeout=180):
@@ -110,6 +115,24 @@ def test_flush_replays(device, material, extra):
     assert r.passed, r.kv.get("fail")
     assert r.num("flush.rc") == 0 and r.num("flush.frames") > 0
     assert r.num("flush.stale") == 0 and r.num("flush.untimed") == 0
+
+
+def test_chained_output(device, material, record_property):
+    """YUYV, which the H.264 decoder does not write itself: the library puts the VideoCore's converter behind it (the
+    chain, as VCCodecInfo.ChainOutputFormats lists it), and the first picture's luma is ffmpeg's."""
+    out = "RAM:hw/chained.yuyv"
+    r = decode(device, material, "clip42.h264", f"OUTFORMAT YUYV FRAMES 1 OUT {out}", ref=False, timeout=60)
+    try:
+        assert r.passed, r.kv.get("fail")
+        data = device.download(out)
+    finally:
+        device.delete(out)
+    w, h = int(r.num("frame.first.width")), int(r.num("frame.first.height"))
+    luma = np.frombuffer(data, np.uint8, w * h * 2).reshape(h, w * 2)[:, 0::2]
+    ref = ffmpeg("-i", str(material.path("clip42.h264")), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-")
+    score = psnr(luma, y_planes(ref, w, h, 1)[0])
+    record_property("psnr", f"{score:.1f} dB")
+    assert score >= CHAINED_LEAST_DB, f"{score:.1f} dB: the chained picture is not the stream's"
 
 
 def test_tunnel_start(device, material):

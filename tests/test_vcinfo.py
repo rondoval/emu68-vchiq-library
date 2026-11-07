@@ -7,7 +7,9 @@ import pytest
 from harness.results import expect
 
 VIDEOCORE_ROWS = 11
-CODEC_ROWS = (r"^\d+ codecs$", r"level 4\.0", r"H264 decoder: .*, session, priority", r"MJPEG decoder: .*, session, priority",
+CHAINED = r"; chained YV12 NV12 YUYV UYVY NV21 I422 YVYU VYUY RGBX32 BGRX32; "  # the converter behind a stream decoder
+CODEC_ROWS = (r"^\d+ codecs$", r"level 4\.0", rf"H264 decoder: .*{CHAINED}[^,]+, session, priority",
+              rf"MJPEG decoder: .*{CHAINED}[^,]+, session, priority",
               r"H264 encoder: .*; reads I420 RGB16 RGB24 BGR24 BGRA32 RGBA32; [^,]+, session, priority",
               r"JPEG encoder: .*; reads I420 RGBA32; [^,]+, session, image call,",
               r"raw converter: .*; writes I420 YV12 NV12 RGB16 RGB24 BGR24 BGRA32 RGBA32 YUYV UYVY NV21 I422 YVYU VYUY RGBX32 BGRX32; "
@@ -57,7 +59,8 @@ def test_components(device, artifacts, record_property):
 
 
 def test_codec_table(device):
-    """VCInfo CODECS: videocore.codec's eleven rows, each saying what serves it: sessions for the streams, image calls for the stills."""
+    """VCInfo CODECS: videocore.codec's eleven rows, each saying what serves it: sessions for the streams, image calls for the stills;
+    the stream decoders with what a chain adds."""
     rc, text = device.run_text("VCInfo", "CODECS")
     expect(text, r"^PASS$", "CODECS")
     for regex in CODEC_ROWS:

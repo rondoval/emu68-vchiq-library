@@ -302,7 +302,10 @@ client's `VCEV_EndOfStream` follows the last picture. A change of the
 stream's shape opens a new converter; the old one stays open while the client
 holds frames of it, and closes when the last comes back. This is how
 the H.265 backend's column frames (`VCF_NV12_COL128`, read by the ISP
-converter) reach a screen; the rule is general.
+converter) reach a screen; the rule is general. `VC_QueryCodec()` reports
+what a chain would add to a decoder's row (`ChainOutputFormats`) by asking
+the same converter choice for each format, so a client can pick its format
+before the open and the open agrees with it.
 
 Every structure the client sees starts with `Size` and grows only at its end.
 

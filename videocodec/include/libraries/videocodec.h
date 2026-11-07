@@ -176,7 +176,8 @@
  *   VC_ImportFrame() of output frames works once VCEV_StreamInfo came.  A new
  *   shape brings a new converter with its VCEV_StreamInfo: frames you hold
  *   stay valid until you release them, and frames you imported are imported
- *   again.
+ *   again.  VC_QueryCodec() lists what such a converter adds in a decoder
+ *   row's ChainOutputFormats, so a format can be chosen before the open.
  */
 #ifndef LIBRARIES_VIDEOCODEC_H
 #define LIBRARIES_VIDEOCODEC_H
@@ -449,6 +450,9 @@ struct VCCodecInfo
 	ULONG Flags;       /* VCCF_*: what the row serves */
 	ULONG InputFormats; /* VCF_MASK() of each VCF_* an encoder or converter reads, others refused; 0 for a decoder */
 	ULONG Tag;          /* VC_FOURCC() of the one form of the codec the row serves (VCA_CodecTag); 0 every form */
+	/* VCF_MASK() of each VCF_* a session of this decoder row also writes, through a converter the library puts behind
+	   it (none of OutputFormats); filled by the library, 0 on other rows */
+	ULONG ChainOutputFormats;
 };
 
 /* VCCodecInfo.Flags */

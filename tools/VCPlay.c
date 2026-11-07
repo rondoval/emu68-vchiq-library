@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * VCPlay - the smallest player on videocodec.library: an H.264 elementary
- * stream in a window on the Workbench.  The example to copy from.
+ * VCPlay - the smallest player on videocodec.library: an H.264 or H.265
+ * elementary stream in a window on the Workbench.  The example to copy from.
  *
  *   VCPlay FILE/A
+ *
+ * A name ending in .h265, .hevc or .265 is H.265, any other H.264.
  *
  * One decoder session.  The session hands out its input packets; each is
  * filled from the file and sent back.  When the decoder has told the
@@ -13,7 +15,9 @@
  * at the stream's frame rate; at each tick the frame waiting is copied into
  * the window with p96WritePixelArray() and released, while the decoder fills
  * its other frames.  The decoding, the scaling and the colour conversion all
- * happen in the VPU.
+ * happen in the VPU.  The H.265 decoder writes a format of its own that no
+ * screen shows: the screen's comes from its row's ChainOutputFormats, and the
+ * library puts a converter behind the decoder for it, inside the session.
  *
  * The close gadget, Ctrl-C or the end of the stream stops it.  Nothing here
  * blocks except the Wait(): a program with a frame loop of its own opens the
@@ -32,6 +36,7 @@
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
 #include <libraries/Picasso96.h>
+#include <string.h>
 #include <libraries/videocodec.h>
 
 struct Library *VideoCodecBase;
@@ -55,11 +60,26 @@ static const struct pixel_format
 };
 #define FORMATS_NUM (sizeof(formats) / sizeof(formats[0]))
 
+/* The codecs by the end of a file's name; any other name is H.264. */
+static const struct stream_codec
+{
+	const char *suffix;
+	ULONG codec;
+	const char *name;
+} codecs[] = {
+    {".h265", VCC_H265, "H.265"},
+    {".hevc", VCC_H265, "H.265"},
+    {".265", VCC_H265, "H.265"},
+};
+#define CODECS_NUM (sizeof(codecs) / sizeof(codecs[0]))
+static const struct stream_codec codec_h264 = {"", VCC_H264, "H.264"};
+
 struct player
 {
 	struct VCSession *s;
 	BYTE sig; /* the session signals it on every return */
 	BPTR file;
+	const struct stream_codec *codec;
 	BOOL eof_sent;
 	const struct pixel_format *pf;
 	struct Window *window;
@@ -136,9 +156,63 @@ static void packet_fill(struct player *p, struct VCPacket *pk)
 	}
 }
 
+/* The codec of a file, by the end of its name in any case. */
+static const struct stream_codec *codec_of_file(const char *name)
+{
+	size_t length = strlen(name);
+	for (ULONG i = 0; i < CODECS_NUM; i++)
+	{
+		size_t suffix_length = strlen(codecs[i].suffix);
+		if (length >= suffix_length && strcasecmp(name + length - suffix_length, codecs[i].suffix) == 0)
+			return &codecs[i];
+	}
+	return &codec_h264;
+}
+
 /* ---- the window ------------------------------------------------------------------ */
 
-/* The screen's own pixel format when the backend writes it (a plain copy then), else the first one it writes. */
+/*
+ * One of formats[] that a mask holds, the best for the screen: the screen's
+ * own format when the mask holds it, so that a frame reaches the window with
+ * a plain copy; else the first of formats[] the mask holds, which
+ * p96WritePixelArray() converts to the screen's as it copies.  The mask's
+ * other formats (YUV, the H.265 decoder's columns) are never chosen:
+ * Picasso96 cannot draw them.  NULL when the mask holds none of formats[].
+ *
+ * mask:       VCF_MASK()s of the formats a session can write
+ * screen_rgb: the Workbench screen's pixel format (RGBFB_*)
+ */
+static const struct pixel_format *format_in(ULONG mask, RGBFTYPE screen_rgb)
+{
+	const struct pixel_format *first = NULL;
+	for (ULONG f = 0; f < FORMATS_NUM; f++)
+	{
+		if (!(mask & VCF_MASK(formats[f].vcf)))
+			continue;
+		if (formats[f].rgb == screen_rgb)
+			return &formats[f];
+		if (first == NULL)
+			first = &formats[f];
+	}
+	return first;
+}
+
+/*
+ * The pixel format to ask the session for, from the first decoder row of the
+ * file's codec.  A session writes two sets of formats: the decoder's own
+ * (OutputFormats), and those of a converter the library puts behind the
+ * decoder when the session asks for one of them (ChainOutputFormats; 0 from
+ * a library older than the field).  In this order:
+ *
+ * 1. the screen's own format, from either set: a plain copy into the window;
+ * 2. another format the decoder writes itself: one pass through the hardware,
+ *    and Picasso96 converts it as it copies;
+ * 3. another format the converter adds.
+ *
+ * The H.264 decoder writes the RGB formats itself.  The H.265 decoder writes
+ * only its own column format, so its frames always come through the
+ * converter.
+ */
 static BOOL format_choose(struct player *p)
 {
 	struct Screen *scr = LockPubScreen(NULL);
@@ -153,15 +227,19 @@ static BOOL format_choose(struct player *p)
 		ci.Size = sizeof(ci);
 		if (VC_QueryCodec(i, &ci) != 0)
 			break;
-		if (ci.Codec != VCC_H264 || ci.Kind != VCK_Decoder)
+		if (ci.Codec != p->codec->codec || ci.Kind != VCK_Decoder)
 			continue;
-		for (ULONG f = 0; f < FORMATS_NUM; f++)
-			if ((ci.OutputFormats & VCF_MASK(formats[f].vcf)) && (p->pf == NULL || formats[f].rgb == screen_rgb))
-				p->pf = &formats[f];
+		ULONG chained = VC_HAS_FIELD(ci.Size, struct VCCodecInfo, ChainOutputFormats) ? ci.ChainOutputFormats : 0;
+		const struct pixel_format *own = format_in(ci.OutputFormats, screen_rgb);           /* the decoder's set */
+		const struct pixel_format *any = format_in(ci.OutputFormats | chained, screen_rgb); /* both sets */
+		if (any != NULL && any->rgb == screen_rgb)
+			p->pf = any; /* 1: the screen's format, from whichever set has it */
+		else
+			p->pf = own != NULL ? own : any; /* 2, else 3 */
 		if (p->pf != NULL)
 			return TRUE;
 	}
-	Printf((CONST_STRPTR) "no backend decodes H.264 to an RGB format Picasso96 knows\n");
+	Printf((CONST_STRPTR) "no backend decodes %s to an RGB format Picasso96 knows\n", p->codec->name);
 	return FALSE;
 }
 
@@ -337,6 +415,7 @@ int main(void)
 		Printf((CONST_STRPTR) "no signal or timer\n");
 		goto out;
 	}
+	p.codec = codec_of_file((const char *)args[0]);
 	p.file = Open((CONST_STRPTR)args[0], MODE_OLDFILE);
 	if (p.file == 0)
 	{
@@ -348,7 +427,7 @@ int main(void)
 
 	/* the output format now, its size once the stream's is known: the backend waits for it after the first event */
 	LONG err = 0;
-	p.s = VC_OpenSessionTags(VCA_Codec, VCC_H264, VCA_Kind, VCK_Decoder, VCA_OutputFormat, p.pf->vcf, VCA_SigTask, (ULONG)FindTask(NULL),
+	p.s = VC_OpenSessionTags(VCA_Codec, p.codec->codec, VCA_Kind, VCK_Decoder, VCA_OutputFormat, p.pf->vcf, VCA_SigTask, (ULONG)FindTask(NULL),
 	                         VCA_SigMask, 1UL << p.sig, VCA_ErrorPtr, (ULONG)&err, TAG_DONE);
 	if (p.s == NULL)
 	{

@@ -124,7 +124,7 @@ int do_status(struct tool *t, LONG *args)
 static const char *format_list(ULONG formats, char *out, ULONG room)
 {
 	ULONG at = 0;
-	for (ULONG f = 0; f < 32; f++)
+	for (ULONG f = 0; f < FORMAT_BITS; f++)
 	{
 		if (!(formats & VCF_MASK(f)))
 			continue;
@@ -165,6 +165,8 @@ int do_codecs(struct tool *t, LONG *args)
 		kv_unum(kv_at("codec", n, "level"), ci.MaxLevel);
 		if (ci.OutputFormats != 0)
 			kv_str(kv_at("codec", n, "output_formats"), format_list(ci.OutputFormats, list, sizeof(list)));
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, ChainOutputFormats) && ci.ChainOutputFormats != 0)
+			kv_str(kv_at("codec", n, "chain_output_formats"), format_list(ci.ChainOutputFormats, list, sizeof(list)));
 		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, InputFormats) && ci.InputFormats != 0)
 			kv_str(kv_at("codec", n, "input_formats"), format_list(ci.InputFormats, list, sizeof(list)));
 		kv_bool(kv_at("codec", n, "session"), (ci.Flags & VCCF_Session) != 0);

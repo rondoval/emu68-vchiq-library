@@ -23,7 +23,11 @@
   converter placed behind it by `videocodec.library`: the program opens one
   session, asks for the RGB format and size it wants, and gets them, as it
   does for H.264. `VCTest DECODE` takes `.h265` files and the `H265` encoding
-  name.
+  name, and the example player `VCPlay` plays `.h265` and `.hevc` files.
+- **For programmers: what a decoder can be asked for.** `VC_QueryCodec()`
+  lists, in a decoder row's new `ChainOutputFormats`, the formats its
+  sessions write through that converter, so a program can choose its screen
+  format before it opens a session. `VCInfo CODECS` shows them as "chained".
 - **For programmers:** backend ABI 1.1 adds `VCB_OutputFrame()`, a session's
   own output frames by index; the frontend imports them into the converter it
   chains. Output frames can be imported into a chained session once

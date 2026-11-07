@@ -67,9 +67,8 @@ install(FILES include/libraries/videocodec.h include/libraries/videocodec_backen
 install(DIRECTORY ${VIDEOCODEC_GENERATED_INCLUDE_DIR}/ DESTINATION include)
 
 # The CMake package a backend built outside this repository finds
-# (find_package(VideoCodec)): the headers above as VideoCodec::headers, and the
-# tools' output grammar as VideoCodec::kv (tools/CMakeLists.txt puts it in the
-# same export set).  Nothing of the library's internals.
+# (find_package(VideoCodec)): the headers above as VideoCodec::headers.  Nothing
+# of the library's internals.
 install(TARGETS videocodec_headers EXPORT VideoCodecTargets)
 install(EXPORT VideoCodecTargets
     NAMESPACE VideoCodec::

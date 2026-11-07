@@ -32,32 +32,18 @@ set(VCHIQ_TOOL_COMPILE_OPTIONS
     -Wstrict-prototypes
 )
 
-# The output grammar and the debug-log writer on their own: a backend's tools
-# outside this repository take them as VideoCodec::kv (videocodec/CMakeLists.txt
-# exports the set), so they link nothing of the rest.
-add_library(vc_kv STATIC
-    common/kv.c
-    common/debugport.c
-)
-target_include_directories(vc_kv PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/common>
-    $<INSTALL_INTERFACE:include/videocodec/tools>
-)
-target_compile_options(vc_kv PRIVATE ${VCHIQ_TOOL_COMPILE_OPTIONS})
-set_target_properties(vc_kv PROPERTIES EXPORT_NAME kv OUTPUT_NAME vckv)
-install(TARGETS vc_kv EXPORT VideoCodecTargets ARCHIVE DESTINATION lib)
-install(FILES common/kv.h common/debugport.h DESTINATION include/videocodec/tools)
-
 add_library(tools_common STATIC
     common/vchiq_client.c
     common/vc_names.c
+    common/kv.c
+    common/debugport.c
     common/waiter.c
     common/pixel_format.c
 )
 target_include_directories(tools_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_compile_options(tools_common PRIVATE ${VCHIQ_TOOL_COMPILE_OPTIONS})
 # drv_timer and the string helpers from emu68-common
-target_link_libraries(tools_common PUBLIC vc_kv vchiq_headers videocodec_headers Emu68Common::common)
+target_link_libraries(tools_common PUBLIC vchiq_headers videocodec_headers Emu68Common::common)
 
 add_executable(VCInfo
     VCInfo.c

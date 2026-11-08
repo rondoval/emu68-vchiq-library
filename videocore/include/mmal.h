@@ -115,6 +115,7 @@
 #define MMAL_ENCODING_BGR32 MMAL_FOURCC('B', 'G', 'R', '4')
 #define MMAL_ENCODING_BGR32_SLICE MMAL_FOURCC('b', 'g', 'r', '4')
 #define MMAL_ENCODING_YUVUV128 MMAL_FOURCC('S', 'A', 'N', 'D')
+#define MMAL_ENCODING_YUV10_COL MMAL_FOURCC('Y', '1', '0', 'C') /* 10-bit columns: 96 samples a 128-byte row */
 #define MMAL_ENCODING_OPAQUE MMAL_FOURCC('O', 'P', 'Q', 'V')
 #define MMAL_ENCODING_PCM_SIGNED_LE MMAL_FOURCC('p', 'c', 'm', 's')
 #define MMAL_ENCODING_PCM_SIGNED_BE MMAL_FOURCC('P', 'C', 'M', 'S')

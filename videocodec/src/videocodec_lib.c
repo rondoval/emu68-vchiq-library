@@ -132,6 +132,7 @@ static const APTR funcTable[] = {
     (APTR)VC_EncodeImageTagList,
     (APTR)VC_ConvertImageTagList,
     (APTR)VC_GetImageInfo,
+    (APTR)VC_CodecOfTag,
     (APTR)-1,
 };
 

@@ -19,6 +19,7 @@ make_level_material, describe).
 from __future__ import annotations
 
 import hashlib
+import struct
 import os
 import re
 import shutil
@@ -189,6 +190,65 @@ def _camera_picture(name: str, w: int, h: int, pix_fmt: str) -> None:
 for _name, _w, _h, _fmt in (("frame640.yuyv", 640, 480, "yuyv422"), ("frame720.yuyv", 1280, 720, "yuyv422"),
                             ("frame640.nv12", 640, 480, "nv12"), ("frame1080.nv12", 1920, 1080, "nv12")):
     _camera_picture(_name, _w, _h, _fmt)
+
+# frame0 at 640x480 in each format the converter is tried with (test_images.py): ffmpeg's own where it has one
+for _name, _fmt in (("frame640.i420", "yuv420p"), ("frame640.nv21", "nv21"), ("frame640.i422", "yuv422p"),
+                    ("frame640.uyvy", "uyvy422"), ("frame640.yvyu", "yvyu422"), ("frame640.rgbx", "rgb0"),
+                    ("frame640.bgrx", "bgr0"), ("frame640.argb", "argb"), ("frame640.abgr", "abgr")):
+    _camera_picture(_name, 640, 480, _fmt)
+
+
+def vyuy_of_uyvy(data: bytes) -> bytes:
+    """UYVY with U and V swapped: VYUY, which ffmpeg has no name for."""
+    out = bytearray(data)
+    out[0::4], out[2::4] = data[2::4], data[0::4]
+    return bytes(out)
+
+
+@recipe("frame640.vyuy", "frame640.uyvy")
+def _frame640_vyuy(cache: Path) -> None:
+    (cache / "frame640.vyuy").write_bytes(vyuy_of_uyvy((cache / "frame640.uyvy").read_bytes()))
+
+
+COLUMN_ROW_BYTES = 128      # a column row's bytes
+COLUMN10_SAMPLES = 96       # 10-bit samples a column row holds: three in each little-endian 32-bit word
+
+
+def pack_columns10(y: list[int], u: list[int], v: list[int], w: int, h: int) -> bytes:
+    """Planar 4:2:0 10-bit samples into VCF_NV12_10_COL128: per column of 96 samples, the luma rows (whole 16) then
+    the interleaved Cb Cr rows, each row three samples to a little-endian 32-bit word, two top bits unused."""
+    rows = (h + 15) & ~15
+    lines = rows + rows // 2
+    columns = (w + COLUMN10_SAMPLES - 1) // COLUMN10_SAMPLES
+    out = bytearray(columns * COLUMN_ROW_BYTES * lines)
+
+    def put(column: int, line: int, samples: list[int]) -> None:
+        s = samples + [0] * (COLUMN10_SAMPLES - len(samples))
+        words = [s[i] | (s[i + 1] << 10) | (s[i + 2] << 20) for i in range(0, COLUMN10_SAMPLES, 3)]
+        at = (column * lines + line) * COLUMN_ROW_BYTES
+        out[at:at + COLUMN_ROW_BYTES] = struct.pack(f"<{COLUMN10_SAMPLES // 3}I", *words)
+
+    cw = w // 2
+    for column in range(columns):
+        x0 = column * COLUMN10_SAMPLES
+        n = min(COLUMN10_SAMPLES, w - x0)
+        for r in range(h):
+            put(column, r, list(y[r * w + x0:r * w + x0 + n]))
+        for r in range(h // 2):
+            pairs = []
+            for a, b in zip(u[r * cw + x0 // 2:r * cw + (x0 + n) // 2], v[r * cw + x0 // 2:r * cw + (x0 + n) // 2]):
+                pairs += [a, b]
+            put(column, rows + r, pairs)
+    return bytes(out)
+
+
+@recipe("frame640.y10c", "frame0.i420")
+def _frame640_y10c(cache: Path) -> None:
+    raw = ffmpeg(*_raw_frame0(cache), "-vf", "scale=640:480", "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-")
+    n_y, n_c = 640 * 480, 320 * 240
+    samples = struct.unpack(f"<{n_y + 2 * n_c}H", raw)
+    (cache / "frame640.y10c").write_bytes(pack_columns10(list(samples[:n_y]), list(samples[n_y:n_y + n_c]),
+                                                         list(samples[n_y + n_c:]), 640, 480))
 
 
 @recipe("clip30.i420", "clip42.h264")

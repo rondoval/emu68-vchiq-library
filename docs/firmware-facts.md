@@ -113,6 +113,46 @@ be done. Add a fact here when a measurement finds one.
 * **NV12 input rows.** The ISP takes NV12 at its own height, the UV rows right
   after the picture's last (1920x1080 packed, 3110400 bytes), no 16-row padding
   needed.
+* **Column ("SAND", `YUVUV128`) input.** The ISP takes the 8-bit column format
+  as a plain picture, width and rows; the column stride as the width with
+  `MMAL_ES_FORMAT_FLAG_COL_FMTS_WIDTH_IS_COL_STRIDE` is refused (EINVAL). It
+  implies the layout from the rows: luma rows aligned to 16, the chroma rows
+  after them in each column (`buffer_size_min` 3133440 for 1920x1080: 15
+  columns of 1632 lines). Read as full-range BT.601 like every other YUV input;
+  195 pictures/s to BGRA32 at 1080p. The 10-bit column format (`Y10C`) is not
+  among the input's encodings (below); the HVS and `ril.video_render` take it.
+* **What the ISP lists.** Its input takes 64 encodings (CM4, firmware of 14
+  May 2025): the Bayer orders at 8, 10, 12, 14 and 16 bits, packed and not,
+  `GREY` and `Y10P` to `Y16`, `YUYV YVYU VYUY UYVY I420 YV12 I422`, `RGB3
+  BGR3 RGBA BGRA RGB2 RGB4 BGR4`, `SAND NV12 NV21`, `SA16` and `SA10`
+  (columns of 16-bit samples), the slice forms `i420 i410`; no `ARGB`,
+  `ABGR` or `Y10C`. Asked with room for fewer (48), the port answers with no
+  list at all. Output 0 lists `YUYV YVYU VYUY UYVY I420 YV12 I422 RGB3 BGR3
+  RGBA BGRA RGB2 SAND NV12 NV21 i420 RGB4 BGR4`; output 1 the YUV ones.
+* **What the ISP converts right** (`tests/test_formats.py`, each picture
+  against ffmpeg's conversion; 640x480 in, 800x600 out). In: `I422`, `NV21`,
+  `UYVY`, `YVYU`, `VYUY` (45 to 49 dB), `RGB4` and `BGR4` through `RGBA` and
+  `BGRA` (47 dB). Out: `YV12` and `I422` (bit exact from I420), `NV12`,
+  `NV21` (45 dB), the four 4:2:2 orders (47 dB), `RGBA` and `BGRA` as
+  RGBX and BGRX (49 dB, the fourth byte 255). Its own `BGR4` it reads as
+  R G B, red and blue swapped, though it writes it right; `YV12` it reads
+  with its chroma planes swapped (11.8 dB), though it writes it right.
+  `ARGB` and `ABGR` it refuses both ways. NV12 and NV21 out keep their
+  chroma right after their own rows, as they come in (`NO_IMAGE_PADDING`
+  set): a picture laid out with whole 16 rows on one side and not on the
+  other is written past its end.
+* **The other components.** `ril.video_decode` takes `H264 MVC MJPG` only.
+  `ril.image_encode` writes `GIF BMP JPEG PNG PPM TGA`, `ril.video_encode`
+  `H264` and `MJPG`. `video_convert` (the image decoder's pipeline) commits
+  `I420 I422 NV21 RGB2 RGBA ARGB SAND`, `ARGB` among them, and refuses
+  `NV12`. Also there: `ril.audio_mixer`, `ril.audio_processor`,
+  `ril.text_scheduler`, `ril.video_scheduler`, `ril.transition`; not:
+  `ril.read_media`, `ril.write_media`, `ril.write_still`, `ril.image_read`,
+  `ril.egl_render`, `ril.camplus`, `ril.video_capture`.
+* **gencmd's codec switches.** `codec_enabled` says enabled for `H264`,
+  `MJPG`, `MVC0`, `PCM` and `AGIF`; disabled for `MPG2`, `WVC1`, `MPG4`,
+  `MP4V`, `H263`, `VP6`, `VP8`, `VP9`, `AV1`, `THRA`, `WMV9`, `AVS`, `DTS`,
+  `DDP` and `HEVC` (the Pi 4's HEVC block is another unit, outside MMAL).
 * **A converter session's rate.** YUYV to BGRA32 through `ril.isp`, the input
   imported: 785 pictures a second at 640x480 and 454 at 1280x720 (CM4). One
   image call costs about 40 ms at either size: the session is the way to

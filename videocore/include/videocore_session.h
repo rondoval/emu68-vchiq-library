@@ -32,6 +32,7 @@ struct vc_session *session_open(struct VideoCoreBase *base, const struct VCSessi
 void session_close(struct vc_session *session, BOOL keep);
 struct VCPacket *session_import_packet(struct vc_session *session, ULONG side, APTR data, ULONG capacity);
 struct VCFrame *session_import_frame(struct vc_session *session, ULONG side, APTR data);
+struct VCFrame *session_output_frame(struct vc_session *session, ULONG index);
 LONG session_send_packet(struct vc_session *session, struct VCPacket *packet);
 LONG session_send_frame(struct vc_session *session, struct VCFrame *frame);
 BOOL session_poll(struct vc_session *session, struct VCItem *item);

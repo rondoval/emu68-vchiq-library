@@ -108,7 +108,9 @@ to MintVID's author, so it may reach a MintVID release, later or not at all.
 
 The VideoCore takes 8-bit H.264 up to 1920x1080, or 1080x1920 upright, and
 keeps up with 1080p at 60 fps, and MJPEG up to 4096 wide and 1920 tall. Larger
-and 10-bit videos play in software, slowly. Re-encode them on a PC (`scale=-2:1920` for an upright one):
+and 10-bit videos play in software, slowly. H.265 needs the stack's
+`rpivid.codec`, on the HEVC block of a Pi 4 or CM4: its README has what it
+plays. Re-encode the rest on a PC (`scale=-2:1920` for an upright one):
 
 ```sh
 ffmpeg -i video.mp4 -vf scale=1920:-2 -c:v libx264 -pix_fmt yuv420p -crf 20 -c:a copy video-1080p.mp4

@@ -20,6 +20,7 @@
  *                                      the tone through an AHI mode, start and stop timed
  *   DECODE file [REF framemd5] [OUT file] [FRAMES n] [NOHASH] [ENCODING H264|MJPEG] [VERBOSE]
  *          [FRAMED] [FPS n] [OUTFORMAT f] [FLUSH n] [BACKEND name] [EXTRADATA] [PAD n] [NOPTS] [NORATE] [PACKET n]
+ *          [HASHES] [CONFIG file] [TAG fourcc] [KEEP] [RESIGNAL n]
  *                                      an elementary stream through a decoder session
  *   IMAGE file OUT pic [OUTWIDTH n] [OUTHEIGHT n] [OUTFORMAT f] [ENCODING c] [BACKEND name] [MISALIGN]
  *                                      one still through VC_DecodeImage()

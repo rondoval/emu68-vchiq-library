@@ -284,6 +284,29 @@ screen mode from the picture's size) reports the stream's shape as an event
 first; the client sets the geometry and imports its frames before its next
 poll, and conversion starts then.
 
+**The chain.** A decoder whose backend row does not write the output format
+the client asked for gets a converter behind it: the frontend looks for a
+converter row that reads one of the decoder's formats and writes the
+client's, opens the decoder with its native output, and when the stream's
+shape arrives opens the converter with that shape on its input and the
+client's format, size, place and aspect on its output. The decoder's frames
+(listed by the backend's `VCB_OutputFrame()`, ABI 1.1) become the converter's
+input frames by import before its first send, so no pixel is copied; the
+converter's output frames are the client's imported ones or the converter
+backend's own. The pump runs inside `VC_Poll()`, in the client's task: the
+decoder's frames go into the converter, the converter's returned input frames
+go back to the decoder, and the client gets the converter's frames and the
+decoder's packets, with one `VCEV_StreamInfo` carrying the converter's
+output. The decoder's end goes through the converter as a mark, so the
+client's `VCEV_EndOfStream` follows the last picture. A change of the
+stream's shape opens a new converter; the old one stays open while the client
+holds frames of it, and closes when the last comes back. This is how
+the H.265 backend's column frames (`VCF_NV12_COL128`, read by the ISP
+converter) reach a screen; the rule is general. `VC_QueryCodec()` reports
+what a chain would add to a decoder's row (`ChainOutputFormats`) by asking
+the same converter choice for each format, so a client can pick its format
+before the open and the open agrees with it.
+
 Every structure the client sees starts with `Size` and grows only at its end.
 
 ### 5.2 Backends
@@ -302,7 +325,16 @@ The frontend knows no hardware. A backend is an Exec library named
   or image calls. It is per codec, so one backend can be hardware for H.264 and
   software for MJPEG. Work goes to the highest row that serves it, ties by name,
   unless the program names a backend with `VCA_Backend`. There is no end-user
-  override.
+  override. Of those rows, one that takes the pictures asked for wins: a
+  converter or encoder must read the input format and a converter write the
+  output format (a decoder session gets a converter behind it instead), so a
+  software converter of lower priority serves the formats the VideoCore lacks
+  while the VideoCore keeps the rest. When no row takes them, the best row is
+  chosen all the same and its refusal says why. A row may serve one form of its codec only, named by its FourCC
+  (`Tag`): it then serves only sessions that name that form (`VCA_CodecTag`),
+  so a decoder of MS-MPEG4 v3 is not handed v2. The FourCCs players meet are
+  mapped to codecs once, in the library (`VC_CodecOfTag()`), not in each
+  player.
 * **The ABI** is stable and documented for third parties: register calls with
   the base in A6, size-prefixed structures, functions appended only. The
   frontend parses every tag list; a backend gets a parameter structure and never

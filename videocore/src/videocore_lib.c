@@ -170,6 +170,7 @@ static const APTR funcTable[] = {
     (APTR)VCB_SetAttrs,
     (APTR)VCB_Image,
     (APTR)VCB_Idle,
+    (APTR)VCB_OutputFrame,
     (APTR)-1,
 };
 

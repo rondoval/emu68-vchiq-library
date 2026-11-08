@@ -6,7 +6,8 @@
  * The frontend parses every tag list (backends never see one) into a
  * struct VCSessionParams, plus the call's other arguments.  A
  * session is a small record naming its backend and the backend's handle;
- * every other call checks the record and forwards to the backend.
+ * every other call checks the record and forwards to the backend, or to
+ * the chain (videocodec_chain.c) when a converter stands behind a decoder.
  */
 #include <exec/memory.h>
 
@@ -51,6 +52,9 @@ static void session_tag(struct VCSessionParams *params, Tag tag, ULONG value)
 		break;
 	case VCA_Kind:
 		params->Kind = value;
+		break;
+	case VCA_CodecTag:
+		params->CodecTag = value;
 		break;
 	case VCA_SigTask:
 		params->SigTask = (struct Task *)value;
@@ -209,8 +213,9 @@ static LONG session_parse(struct VideoCodecBase *base, struct TagItem *tags, str
  * @backend_name: the backend the program asked for (VCA_Backend), or NULL
  * @err:          where the result goes: 0 or a VCERR_*
  *
- * The backend is the one whose codec row for the codec and kind serves
- * sessions and has the highest priority, or the one @backend_name means.
+ * The backend is the one whose codec row for the codec, its FourCC and the
+ * kind serves sessions, takes the pictures asked for and has the highest
+ * priority (vc_backend_choose()), or the one @backend_name means.
  *
  * Return: the session, or NULL with *@err set.
  */
@@ -221,34 +226,45 @@ static struct VCSession *session_open(struct VideoCodecBase *base, struct VCSess
 	if (params->SigMask != 0 && params->SigTask == NULL)
 		params->SigTask = FindTask(NULL);
 
-	ObtainSemaphore(&base->lock);
-	vc_backends_load(base);
-	struct vc_backend *backend = vc_backend_for(base, params->Codec, params->Kind, backend_name, VCCF_Session);
-	ReleaseSemaphore(&base->lock);
-	if (backend == NULL)
-	{
-		*err = VCERR_NOBACKEND;
-		return NULL;
-	}
-
 	struct VCSession *session = AllocMem(sizeof(*session), MEMF_PUBLIC | MEMF_CLEAR);
 	if (session == NULL)
 	{
 		*err = VCERR_NOMEM;
 		return NULL;
 	}
-	struct Library *VCBackendBase = backend->library; /* the VCB_* calls go through it */
-	LONG backend_err = 0;
-	session->handle = VCB_OpenSession(params, &backend_err);
-	if (session->handle == NULL)
+	const struct VCCodecInfo *row = NULL;
+	ObtainSemaphore(&base->lock);
+	vc_backends_load(base);
+	struct vc_choice want = {
+	    .codec = params->Codec,
+	    .tag = params->CodecTag,
+	    .kind = params->Kind,
+	    .use = VCCF_Session,
+	    .reads = params->Kind == VCK_Decoder ? 0u : vc_format_mask(params->InputFormat),
+	    /* a decoder gets a converter behind it for a format it does not write (videocodec_chain.c) */
+	    .writes = params->Kind == VCK_Decoder ? 0u : vc_format_mask(params->OutputFormat),
+	};
+	session->backend = vc_backend_choose(base, &want, backend_name, &row);
+	*err = session->backend != NULL ? 0 : VCERR_NOBACKEND;
+	if (session->backend != NULL)
+		session->chain = chain_open(base, params, session->backend, row, err); /* a converter behind the decoder when the row lacks the format asked */
+	ReleaseSemaphore(&base->lock);
+	if (*err == 0)
 	{
+		struct Library *VCBackendBase = session->backend->library; /* the VCB_* calls go through it */
+		LONG backend_err = 0;
+		session->handle = VCB_OpenSession(params, &backend_err);
+		if (session->handle == NULL)
+			*err = backend_err != 0 ? backend_err : VCERR_UNSUPPORTED;
+	}
+	if (*err != 0)
+	{
+		if (session->chain != NULL)
+			chain_close(base, session); /* its converter not open yet: the chain freed */
 		FreeMem(session, sizeof(*session));
-		*err = backend_err != 0 ? backend_err : VCERR_UNSUPPORTED;
 		return NULL;
 	}
 	session->magic = VC_SESSION_MAGIC;
-	session->backend = backend;
-	*err = 0;
 	return session;
 }
 
@@ -265,6 +281,8 @@ static void session_close(struct VideoCodecBase *base, struct VCSession *session
 	struct ExecBase *SysBase = base->SysBase;
 	struct Library *VCBackendBase = session->backend->library; /* the VCB_* calls go through it */
 	session->magic = 0;
+	if (session->chain != NULL)
+		chain_close(base, session); /* the converter first: it holds the decoder's frames */
 	VCB_CloseSession(session->handle);
 	FreeMem(session, sizeof(*session));
 }
@@ -348,7 +366,11 @@ struct VCFrame *VC_ImportFrame(struct VCSession *session asm("a0"), ULONG side a
 {
 	(void)base;
 	struct Library *VCBackendBase = session_backend(session);
-	return VCBackendBase != NULL ? VCB_ImportFrame(session->handle, side, data) : NULL;
+	if (VCBackendBase == NULL)
+		return NULL;
+	if (session->chain != NULL && side == VCS_Output)
+		return chain_import_frame(session, data); /* the converter's; input frames would be the decoder's, which takes packets */
+	return VCB_ImportFrame(session->handle, side, data);
 }
 
 /**
@@ -394,7 +416,11 @@ LONG VC_Poll(struct VCSession *session asm("a0"), struct VCItem *item asm("a1"),
 {
 	(void)base;
 	struct Library *VCBackendBase = session_backend(session);
-	return VCBackendBase != NULL && item != NULL ? VCB_Poll(session->handle, item) : 0;
+	if (VCBackendBase == NULL || item == NULL)
+		return 0;
+	if (session->chain != NULL)
+		return chain_poll(session, item);
+	return VCB_Poll(session->handle, item);
 }
 
 /**
@@ -407,7 +433,11 @@ VOID VC_ReleaseFrame(struct VCSession *session asm("a0"), struct VCFrame *frame 
 {
 	(void)base;
 	struct Library *VCBackendBase = session_backend(session);
-	if (VCBackendBase != NULL)
+	if (VCBackendBase == NULL)
+		return;
+	if (session->chain != NULL)
+		chain_release_frame(session, frame);
+	else
 		VCB_ReleaseFrame(session->handle, frame);
 }
 
@@ -436,7 +466,9 @@ LONG VC_Flush(struct VCSession *session asm("a0"), struct VideoCodecBase *base a
 {
 	(void)base;
 	struct Library *VCBackendBase = session_backend(session);
-	return VCBackendBase != NULL ? VCB_Flush(session->handle) : VCERR_BADPARAM;
+	if (VCBackendBase == NULL)
+		return VCERR_BADPARAM;
+	return session->chain != NULL ? chain_flush(session) : VCB_Flush(session->handle);
 }
 
 /**
@@ -460,7 +492,7 @@ LONG VC_SetAttrsTagList(struct VCSession *session asm("a0"), struct TagItem *tag
 	params.Size = sizeof(params);
 
 	LONG err = session_parse(base, tags, &params, FALSE);
-	if (err != 0 || params.Changed == 0)
+	if (err != 0 || (params.Changed == 0 && params.SigMask == 0 && params.SigTask == NULL))
 		return err;
-	return VCB_SetAttrs(session->handle, &params);
+	return session->chain != NULL ? chain_set_attrs(session, &params) : VCB_SetAttrs(session->handle, &params);
 }

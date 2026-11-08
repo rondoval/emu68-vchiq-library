@@ -19,7 +19,18 @@
  */
 BOOL format_is_planar(ULONG format)
 {
-	return format == VCF_I420 || format == VCF_YV12 || format == VCF_NV12;
+	return format == VCF_I420 || format == VCF_YV12 || format == VCF_NV12 || format == VCF_NV21 || format == VCF_I422;
+}
+
+/**
+ * format_is_column() - Whether a format lays the picture out in 128-byte columns.
+ * @format: VCF_*
+ *
+ * Return: TRUE for the column format.
+ */
+BOOL format_is_column(ULONG format)
+{
+	return format == VCF_NV12_COL128 || format == VCF_NV12_10_COL128;
 }
 
 /**
@@ -36,16 +47,30 @@ u32 format_bytes_per_pixel(ULONG format)
 	case VCF_I420:
 	case VCF_YV12:
 	case VCF_NV12:
+	case VCF_NV21:
+	case VCF_I422:
+	case VCF_NV12_COL128:
+	case VCF_NV12_10_COL128:
+	case VCF_CLUT8:
 		return 1;
 	case VCF_RGB16:
+	case VCF_RGB16BE:
+	case VCF_RGB15:
+	case VCF_RGB15BE:
 	case VCF_YUYV:
 	case VCF_UYVY:
+	case VCF_YVYU:
+	case VCF_VYUY:
 		return 2;
 	case VCF_RGB24:
 	case VCF_BGR24:
 		return 3;
 	case VCF_BGRA32:
 	case VCF_RGBA32:
+	case VCF_RGBX32:
+	case VCF_BGRX32:
+	case VCF_ARGB32:
+	case VCF_ABGR32:
 		return 4;
 	default:
 		return 0;
@@ -103,8 +128,28 @@ ULONG format_encoding(ULONG format)
 		return MMAL_ENCODING_YUYV;
 	case VCF_UYVY:
 		return MMAL_ENCODING_UYVY;
+	case VCF_NV12_COL128:
+		return MMAL_ENCODING_YUVUV128;
+	case VCF_NV21:
+		return MMAL_ENCODING_NV21;
+	case VCF_I422:
+		return MMAL_ENCODING_I422;
+	case VCF_YVYU:
+		return MMAL_ENCODING_YVYU;
+	case VCF_VYUY:
+		return MMAL_ENCODING_VYUY;
+	case VCF_RGBX32:
+		return MMAL_ENCODING_RGBA; /* the same bytes; the ISP writes 255 as the fourth and reads past it */
+	case VCF_BGRX32:
+		return MMAL_ENCODING_BGRA; /* likewise: its own BGR4 it reads as R G B (docs/firmware-facts.md) */
+	case VCF_ARGB32:
+		return MMAL_ENCODING_ARGB;
+	case VCF_ABGR32:
+		return MMAL_ENCODING_ABGR;
+	case VCF_NV12_10_COL128:
+		return MMAL_ENCODING_YUV10_COL;
 	default:
-		return 0;
+		return 0; /* RGB16BE, RGB15, RGB15BE, CLUT8: no MMAL encoding */
 	}
 }
 
@@ -157,26 +202,45 @@ ULONG image_codec_encoding(ULONG codec)
  * @width:    pixels per row of the buffer (not of the visible picture)
  * @height:   rows
  * @pitch:    bytes per row, 0 for the natural one
- * @own_rows: a planar picture's chroma follows its own rows, not the VPU's
  * @geometry: where the layout goes
  *
  * Planar pictures take the VPU's alignment: rows of a multiple of 32 pixels,
- * a multiple of 16 of them unless @own_rows.  A packed picture's pitch is
+ * a multiple of 16 of them; NV12 and NV21 keep their chroma right after their
+ * own rows, as a camera sends them and the header promises, in and out.  A packed picture's pitch is
  * whole pixels: an MMAL format has no stride, the VPU works it out from the
- * width.
+ * width.  A column picture's pitch is one column's bytes: 128 times its
+ * rows, the luma rows (a multiple of 16, as the VPU reads them) and half as
+ * many chroma rows.
  *
  * Return: TRUE, FALSE for an unknown format, an empty picture, or a pitch too
  * small for the width or not of whole pixels.
  */
-BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, BOOL own_rows, struct vc_geometry *geometry)
+BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, struct vc_geometry *geometry)
 {
 	u32 bytes_per_pixel = format_bytes_per_pixel(format);
 	if (bytes_per_pixel == 0 || width == 0 || height == 0)
 		return FALSE;
 	memset(geometry, 0, sizeof(*geometry));
+	if (format_is_column(format))
+	{
+		u32 rows = ALIGN_UP(height, 16u);
+		u32 column_bytes = pitch != 0 ? pitch : COLUMN_BYTES * (rows + rows / 2u);
+		u32 samples = format == VCF_NV12_10_COL128 ? COLUMN10_SAMPLES : COLUMN_BYTES; /* a column row's samples */
+		u32 columns = (width + samples - 1u) / samples;
+		if (column_bytes < COLUMN_BYTES * (rows + rows / 2u) || column_bytes % COLUMN_BYTES != 0)
+			return FALSE;
+		geometry->planes = 2;
+		geometry->width = columns * samples;
+		geometry->height = rows;
+		geometry->pitch[0] = geometry->pitch[1] = column_bytes;
+		geometry->offset[1] = COLUMN_BYTES * rows;
+		geometry->size = columns * column_bytes;
+		return TRUE;
+	}
 	if (format_is_planar(format))
 	{
-		u32 rows = own_rows ? height : ALIGN_UP(height, 16u);
+		BOOL pairs = format == VCF_NV12 || format == VCF_NV21;
+		u32 rows = pairs ? height : ALIGN_UP(height, 16u);
 		u32 row_bytes = pitch != 0 ? pitch : ALIGN_UP(width, 32u);
 		if (row_bytes < width || (row_bytes & 1u) != 0)
 			return FALSE;
@@ -184,7 +248,7 @@ BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, BOOL own_r
 		geometry->width = row_bytes;
 		geometry->height = rows;
 		geometry->pitch[0] = row_bytes;
-		if (format == VCF_NV12)
+		if (pairs)
 		{
 			geometry->planes = 2;
 			geometry->pitch[1] = row_bytes;
@@ -193,11 +257,13 @@ BOOL picture_geometry(ULONG format, u32 width, u32 height, u32 pitch, BOOL own_r
 		}
 		else
 		{
-			u32 chroma = (row_bytes / 2u) * (rows / 2u);
+			u32 chroma_rows = format == VCF_I422 ? rows : rows / 2u;
+			u32 chroma = (row_bytes / 2u) * chroma_rows;
+			BOOL v_first = format == VCF_YV12;
 			geometry->planes = 3;
 			geometry->pitch[1] = geometry->pitch[2] = row_bytes / 2u;
-			geometry->offset[1] = format == VCF_I420 ? luma : luma + chroma; /* YV12 has V first */
-			geometry->offset[2] = format == VCF_I420 ? luma + chroma : luma;
+			geometry->offset[1] = v_first ? luma + chroma : luma;
+			geometry->offset[2] = v_first ? luma : luma + chroma;
 			geometry->size = luma + 2u * chroma;
 		}
 		return TRUE;

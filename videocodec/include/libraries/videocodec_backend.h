@@ -21,7 +21,8 @@
  * - It calls VCB_GetInfo() first.  A backend is kept only if it reports the
  *   ABI major of this header and VCInfo.Codecs, the number of rows
  *   VCB_QueryCodec() answers (index 0 to Codecs - 1).  The table is read
- *   once and cached.
+ *   once and cached.  VCCodecInfo.ChainOutputFormats is the frontend's to
+ *   fill: a backend leaves it 0.
  * - A session goes to the backend whose row for its codec and kind serves
  *   sessions (VCCF_Session) and has the highest VCCodecInfo.Priority
  *   (VCB_PRIORITY_*; ties by backend name), or to the one the program names
@@ -46,6 +47,21 @@
  *   the client.
  * - Errors are VCERR_*.
  * - Any task may call a backend at any time; the backend serialises itself.
+ * - VCB_OutputFrame() (ABI 1.1) lists a decoder session's output frames:
+ *   the VCFrame objects the backend made to decode pictures into, which
+ *   VCB_Poll() otherwise hands out one at a time as pictures finish.  The
+ *   frontend calls it with 0, 1, 2 and so on, and stops at the first NULL;
+ *   each answer is one of those frames, the same object whenever it is asked.
+ *   The index only walks the set: it is no picture number.  The frames exist
+ *   once the stream's size is known (an open that gave the size or the
+ *   extradata, else after its VCEV_StreamInfo); until then the answer is
+ *   NULL, and a new size brings new frames, listed again after its
+ *   VCEV_StreamInfo.  The frontend needs the list to put a converter behind
+ *   a decoder whose output format the client cannot take: a converter takes
+ *   its input frames by import before its first picture only, so every one
+ *   of the decoder's frames is imported up front, and each decoded picture
+ *   then reaches the converter where it lies, with no copy.  A backend of
+ *   ABI 1.0 lacks the function; its decoders get no converter.
  */
 #ifndef LIBRARIES_VIDEOCODEC_BACKEND_H
 #define LIBRARIES_VIDEOCODEC_BACKEND_H
@@ -60,9 +76,10 @@
  * an older one as far as the peer's Size.  1.0 is the first.
  */
 #define VCB_ABI_VERSION_MAJOR 1
-#define VCB_ABI_VERSION_MINOR 0
+#define VCB_ABI_VERSION_MINOR 1
 #define VCB_ABI_VERSION ((VCB_ABI_VERSION_MAJOR << 16) | VCB_ABI_VERSION_MINOR)
 #define VCB_ABI_MAJOR(v) ((v) >> 16)
+#define VCB_ABI_MINOR(v) ((v) & 0xffffu)
 
 /*
  * VCCodecInfo.Priority, set by the backend in every row it returns: which
@@ -75,7 +92,16 @@
 #define VCB_PRIORITY_HARDWARE 50 /* the codec runs on dedicated hardware */
 #define VCB_PRIORITY_SOFTWARE 0  /* the 68k does the work */
 
-/* VCSessionParams.Changed: what a VCB_SetAttrs() carries (0 at open: everything) */
+/*
+ * VCSessionParams.Changed: what a VCB_SetAttrs() carries (0 at open:
+ * everything).  A SigTask or SigMask set in a VCB_SetAttrs() is signalled
+ * from then on, whatever Changed says.  An output geometry change merges
+ * into what the session has: a field given replaces the one kept, 0 keeps
+ * it; a new format or width without a pitch drops the pitch kept;
+ * HaveDestRect and KeepAspect replace each other.  The frontend reopens a
+ * converter behind a decoder with what it merged by the same rule, at each
+ * new stream shape.
+ */
 #define VCSPF_Bitrate (1UL << 0)
 #define VCSPF_RequestKeyFrame (1UL << 1)
 #define VCSPF_OutputGeometry (1UL << 2) /* OutputFormat/Width/Height/Pitch, DestRect, KeepAspect: the output set is remade */
@@ -102,8 +128,8 @@ struct VCSessionParams
 	ULONG KeepAspect;                    /* fit the picture in the output frame, centred, instead of stretching it */
 	ULONG InputCount, InputSize;         /* the backend's own input buffers: how many, and a packet's bytes */
 	ULONG OutputCount, OutputSize;       /* the backend's own output buffers: how many, and a packet's bytes */
-	struct Task *SigTask;                /* the task to signal: the opener when a mask came without one */
-	ULONG SigMask;                       /* the signal bits to Signal() when something is ready; 0: the client polls */
+	struct Task *SigTask;                /* the task to signal: the opener when a mask came without one; VCB_SetAttrs(): another, when set */
+	ULONG SigMask;                       /* the signal bits to Signal() when something is ready; 0: the client polls; VCB_SetAttrs(): others, when set */
 	ULONG Framed;                        /* a decoder: each packet holds whole pictures */
 	struct VCRational FrameRate;         /* the input's frame rate; Num 0 when not given */
 	ULONG Bitrate, Profile, Level;       /* an encoder: bits per second, VCP_*, H.264 level times ten */
@@ -113,6 +139,7 @@ struct VCSessionParams
 	ULONG ExtradataSize;                 /* bytes at Extradata */
 	CONST_APTR Extradata;                /* a decoder: the codec configuration (H.264 SPS/PPS); valid in VCB_OpenSession() only */
 	ULONG ColorSpace;                    /* an encoder: VCCS_* of its input pictures */
+	ULONG CodecTag;                      /* VCA_CodecTag: the container's FourCC for the codec, 0 none (ABI 1.1) */
 };
 
 /*

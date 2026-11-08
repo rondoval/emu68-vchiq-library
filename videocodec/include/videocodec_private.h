@@ -79,15 +79,19 @@ struct vc_backend
 	struct Library *library;        /* the backend's base, for its VCB_* calls */
 	struct VCCodecInfo *caps;       /* its codec table as it gave it (AllocVec); NULL if empty */
 	ULONG ncaps;                    /* rows in caps */
+	ULONG abi;                      /* VCInfo.ABIVersion as it reported it */
 	char name[VC_BACKEND_NAME_MAX]; /* its file name in LIBS:videocodec/ */
 };
+
+struct vc_chain; /* a converter behind a decoder: videocodec_chain.c's own */
 
 /* What a client's session pointer points to: which backend serves it and the backend's own handle. */
 struct VCSession
 {
 	ULONG magic;                /* VC_SESSION_MAGIC while open; 0 once closed, so a stale pointer is refused */
-	struct vc_backend *backend; /* the backend serving it, chosen at open */
+	struct vc_backend *backend; /* the backend serving it (a chain's decoder), chosen at open */
 	APTR handle;                /* the backend's session, passed to every VCB_* call */
+	struct vc_chain *chain;     /* a converter behind the decoder, or NULL */
 };
 
 struct VideoCodecBase
@@ -106,8 +110,35 @@ void vc_backends_init(struct VideoCodecBase *base);   /* library init: empty lis
 void vc_backends_free(struct VideoCodecBase *base);   /* expunge: every backend closed */
 void vc_backends_idle(struct VideoCodecBase *base);   /* the last opener gone: each backend lets go of what it keeps (VCB_Idle()) */
 void vc_backends_load(struct VideoCodecBase *base); /* the drawer scanned if possible, else the fallback opened */
-struct vc_backend *vc_backend_for(struct VideoCodecBase *base, ULONG codec, ULONG kind, const char *name,
-                                  ULONG use); /* the backend of a session or an image call (VCCF_*) */
+/* What a session, an image call or a chain asks of a backend's row (vc_backend_choose()) */
+struct vc_choice
+{
+	ULONG codec, tag, kind; /* VCC_*, its FourCC or 0, VCK_* */
+	ULONG use;              /* VCCF_Session or VCCF_Image */
+	ULONG reads;            /* VCF_MASK()s of the pictures to read, any one of them; 0 asks nothing */
+	ULONG writes;           /* VCF_MASK() of the picture to write; 0 asks nothing */
+};
+#define VC_FORMAT_BITS 32u           /* format numbers below this have a bit in a row's masks */
+ULONG vc_format_mask(ULONG format); /* VCF_MASK(), 0 for none or past the masks' bits */
+BOOL vc_row_takes(const struct VCCodecInfo *row, const struct vc_choice *want); /* reads and writes what is asked */
+/* the backend of a session, an image call or a chain's converter, with the row that won */
+struct vc_backend *vc_backend_choose(struct VideoCodecBase *base, const struct vc_choice *want, const char *name,
+                                     const struct VCCodecInfo **row);
+
+/* videocodec_tags.c */
+ULONG vc_tag_fold(ULONG tag); /* a FourCC's letters in upper case */
+
+/* videocodec_chain.c: a converter behind a decoder; chain_open() with base->lock held, the rest without (the backends serialise themselves) */
+struct vc_chain *chain_open(struct VideoCodecBase *base, struct VCSessionParams *params, const struct vc_backend *decoder,
+                            const struct VCCodecInfo *row, LONG *err); /* NULL with *err 0: none needed */
+/* VCCodecInfo.ChainOutputFormats of a backend's row: what a chain behind its sessions adds; base->lock held */
+ULONG chain_output_formats(struct VideoCodecBase *base, const struct vc_backend *decoder, const struct VCCodecInfo *row);
+void chain_close(struct VideoCodecBase *base, struct VCSession *session); /* the converter and the chain; before the decoder's close */
+LONG chain_poll(struct VCSession *session, struct VCItem *item);
+struct VCFrame *chain_import_frame(struct VCSession *session, APTR data); /* an output frame: the converter's */
+void chain_release_frame(struct VCSession *session, struct VCFrame *frame);
+LONG chain_flush(struct VCSession *session);
+LONG chain_set_attrs(struct VCSession *session, struct VCSessionParams *params);
 
 /* the library's functions (LVOs, base in A6): documented in libraries/videocodec.h */
 struct VCSession *VC_OpenSessionTagList(struct TagItem *tags asm("a0"), struct VideoCodecBase *base asm("a6"));
@@ -124,6 +155,7 @@ VOID VC_ReleasePacket(struct VCSession *session asm("a0"), struct VCPacket *pack
 LONG VC_Flush(struct VCSession *session asm("a0"), struct VideoCodecBase *base asm("a6"));
 LONG VC_SetAttrsTagList(struct VCSession *session asm("a0"), struct TagItem *tags asm("a1"), struct VideoCodecBase *base asm("a6"));
 LONG VC_QueryCodec(ULONG index asm("d0"), struct VCCodecInfo *info asm("a0"), struct VideoCodecBase *base asm("a6"));
+ULONG VC_CodecOfTag(ULONG tag asm("d0"), struct VideoCodecBase *base asm("a6"));
 LONG VC_GetBackendInfo(ULONG index asm("d0"), struct VCInfo *info asm("a0"), struct VideoCodecBase *base asm("a6"));
 LONG VC_DecodeImageTagList(struct TagItem *tags asm("a0"), struct VideoCodecBase *base asm("a6"));
 LONG VC_EncodeImageTagList(struct TagItem *tags asm("a0"), struct VideoCodecBase *base asm("a6"));

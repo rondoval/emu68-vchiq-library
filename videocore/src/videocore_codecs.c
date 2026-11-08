@@ -9,12 +9,18 @@
 #include <videocore_private.h>
 #include <session_internal.h>
 
-/* What the ISP writes, and what the H.264 encoder reads: it goes through the ISP for all but I420 */
-#define ISP_FORMATS \
+/* What the decoders write and the H.264 encoder reads: I420 natively, the RGB formats through the ISP */
+#define PIPELINE_FORMATS \
 	(VCF_MASK(VCF_I420) | VCF_MASK(VCF_RGB16) | VCF_MASK(VCF_RGB24) | VCF_MASK(VCF_BGR24) | VCF_MASK(VCF_BGRA32) | VCF_MASK(VCF_RGBA32))
-/* What the converter reads: the ISP's own formats and a camera's YUYV and NV12 */
-#define ISP_INPUT_FORMATS (ISP_FORMATS | VCF_MASK(VCF_YUYV) | VCF_MASK(VCF_NV12))
-#define JPEG_INPUT_FORMATS (VCF_MASK(VCF_I420) | VCF_MASK(VCF_RGBA32))
+/* What the converter reads and writes: those, NV12 and NV21, planar 4:2:2, the four packed 4:2:2 orders, and the RGB
+   formats without alpha (as RGBA and BGRA) */
+#define CONVERTER_FORMATS                                                                                                  \
+	(PIPELINE_FORMATS | VCF_MASK(VCF_NV12) | VCF_MASK(VCF_NV21) | VCF_MASK(VCF_I422) | VCF_MASK(VCF_YUYV) |              \
+	 VCF_MASK(VCF_UYVY) | VCF_MASK(VCF_YVYU) | VCF_MASK(VCF_VYUY) | VCF_MASK(VCF_RGBX32) | VCF_MASK(VCF_BGRX32))
+/* One way only: it reads the H.265 decoder's column frames, and writes YV12 (it would read its chroma planes swapped) */
+#define CONVERTER_READS (CONVERTER_FORMATS | VCF_MASK(VCF_NV12_COL128))
+#define CONVERTER_WRITES (CONVERTER_FORMATS | VCF_MASK(VCF_YV12))
+#define JPEG_ENCODER_READS (VCF_MASK(VCF_I420) | VCF_MASK(VCF_RGBA32))
 
 #define BOTH (VCCF_Session | VCCF_Image)
 
@@ -30,17 +36,17 @@ static const struct
 	UWORD codec, kind, max_level, flags;
 	ULONG output_formats, input_formats;
 } codec_table[] = {
-    {VCC_H264, VCK_Decoder, 42, VCCF_Session, ISP_FORMATS, 0}, /* in real time at 4.2's ceiling; the level is not checked */
-    {VCC_MJPEG, VCK_Decoder, 0, VCCF_Session, ISP_FORMATS, 0},
-    {VCC_JPEG, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
-    {VCC_PNG, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
-    {VCC_GIF, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
-    {VCC_BMP, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
-    {VCC_TGA, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
-    {VCC_PPM, VCK_Decoder, 0, VCCF_Image, ISP_FORMATS, 0},
-    {VCC_Raw, VCK_Converter, 0, BOTH, ISP_FORMATS, ISP_INPUT_FORMATS},
-    {VCC_JPEG, VCK_Encoder, 0, BOTH, 0, JPEG_INPUT_FORMATS},
-    {VCC_H264, VCK_Encoder, 40, VCCF_Session, 0, ISP_FORMATS}, /* specified at level 4.0; higher levels in the headers */
+    {VCC_H264, VCK_Decoder, 42, VCCF_Session, PIPELINE_FORMATS, 0}, /* in real time at 4.2's ceiling; the level is not checked */
+    {VCC_MJPEG, VCK_Decoder, 0, VCCF_Session, PIPELINE_FORMATS, 0},
+    {VCC_JPEG, VCK_Decoder, 0, VCCF_Image, PIPELINE_FORMATS, 0},
+    {VCC_PNG, VCK_Decoder, 0, VCCF_Image, PIPELINE_FORMATS, 0},
+    {VCC_GIF, VCK_Decoder, 0, VCCF_Image, PIPELINE_FORMATS, 0},
+    {VCC_BMP, VCK_Decoder, 0, VCCF_Image, PIPELINE_FORMATS, 0},
+    {VCC_TGA, VCK_Decoder, 0, VCCF_Image, PIPELINE_FORMATS, 0},
+    {VCC_PPM, VCK_Decoder, 0, VCCF_Image, PIPELINE_FORMATS, 0},
+    {VCC_Raw, VCK_Converter, 0, BOTH, CONVERTER_WRITES, CONVERTER_READS},
+    {VCC_JPEG, VCK_Encoder, 0, BOTH, 0, JPEG_ENCODER_READS},
+    {VCC_H264, VCK_Encoder, 40, VCCF_Session, 0, PIPELINE_FORMATS}, /* specified at level 4.0; higher levels in the headers */
 };
 
 /**

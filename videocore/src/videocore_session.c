@@ -677,6 +677,21 @@ struct VCFrame *session_import_frame(struct vc_session *session, ULONG side, APT
 	return &object->pub.frame;
 }
 
+/**
+ * session_output_frame() - One of the session's output frames, by index (VCB_OutputFrame()).
+ * @session: the session
+ * @index:   0 upward
+ *
+ * Return: the frame, NULL past the last or for a packet side.
+ */
+struct VCFrame *session_output_frame(struct vc_session *session, ULONG index)
+{
+	struct vc_set *set = &session->output_set;
+	if (index >= set->count || !set->objects[index]->is_frame)
+		return NULL;
+	return &set->objects[index]->pub.frame;
+}
+
 /* ---- sends and releases ----------------------------------------------------------------- */
 
 /**
@@ -849,9 +864,30 @@ LONG session_flush(struct vc_session *session)
 }
 
 /**
+ * session_signal() - Signal another task, or with another signal, from now on.
+ * @session: the session
+ * @changes: the change: a SigTask or SigMask given replaces the session's
+ *
+ * Every component the session has is retargeted; one it makes later takes
+ * the session's parameters.
+ */
+static void session_signal(struct vc_session *session, const struct VCSessionParams *changes)
+{
+	struct VCSessionParams *params = &session->params;
+	if (changes->SigTask != NULL)
+		params->SigTask = changes->SigTask;
+	if (changes->SigMask != 0)
+		params->SigMask = changes->SigMask;
+	struct mmal_component *const components[] = {session->decoder, session->isp, session->encoder};
+	for (u32 i = 0; i < ARRAY_SIZE(components); i++)
+		if (components[i] != NULL)
+			mmal_component_retarget(session->base, components[i], params->SigTask, params->SigMask);
+}
+
+/**
  * session_set_attrs() - Change a running session (VCB_SetAttrs()).
  * @session: the session
- * @changes: the parameters, Changed naming which
+ * @changes: the parameters, Changed naming which; a SigTask or SigMask set changes the signal
  *
  * Return: 0, VCERR_UNSUPPORTED for a change the kind cannot make, or the error.
  */
@@ -859,6 +895,8 @@ LONG session_set_attrs(struct vc_session *session, const struct VCSessionParams 
 {
 	if (session->failed)
 		return VCERR_BADSTATE;
+	if (changes->SigTask != NULL || changes->SigMask != 0)
+		session_signal(session, changes);
 	if (changes->Changed == 0)
 		return 0;
 	return session->ops->set_attrs != NULL ? session->ops->set_attrs(session, changes) : VCERR_UNSUPPORTED;

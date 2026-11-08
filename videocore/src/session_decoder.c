@@ -159,7 +159,7 @@ void format_change_from_port(const struct mmal_port *port, struct mmal_format_ch
 BOOL shape_set_native(struct vc_session *session, ULONG format, u32 width, u32 height, u32 pitch, const struct VCRect *dest)
 {
 	struct vc_shape *shape = &session->shape;
-	if (!picture_geometry(format, width, height, pitch, FALSE, &shape->geometry))
+	if (!picture_geometry(format, width, height, pitch, &shape->geometry))
 		return FALSE;
 	shape->format = format;
 	shape->dest = *dest;

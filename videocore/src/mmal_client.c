@@ -576,6 +576,25 @@ struct mmal_component *mmal_component_take(struct VideoCoreBase *base, const cha
 }
 
 /**
+ * mmal_component_retarget() - Signal another task, or with another signal, from now on.
+ * @base:      the library base
+ * @component: the component
+ * @task:      the task Signal()led from now on
+ * @sigmask:   the signal
+ *
+ * Under mmal_lock, which the receive task holds when it signals: no signal
+ * goes out with the task of one and the mask of the other.
+ */
+void mmal_component_retarget(struct VideoCoreBase *base, struct mmal_component *component, struct Task *task, ULONG sigmask)
+{
+	struct ExecBase *SysBase = base->SysBase;
+	ObtainSemaphore(&base->mmal_lock);
+	component->task = task;
+	component->sigmask = sigmask;
+	ReleaseSemaphore(&base->mmal_lock);
+}
+
+/**
  * mmal_service_open() - Open the service as the first component would, ahead of it.
  * @base: the library base, from a task
  *

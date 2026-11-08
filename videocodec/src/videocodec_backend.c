@@ -30,8 +30,6 @@
 #define BE_FROM_NODE(node) ((struct vc_backend *)(node))
 #define VC_CAPS_MAX 64 /* codec table rows read from one backend: a bound against one that never says "no more" */
 
-/* @size, a Size a peer returned, covers @field of @type */
-
 /* ---- names ----------------------------------------------------------------------- */
 
 /**
@@ -87,8 +85,9 @@ static struct vc_backend *backend_by_name(struct VideoCodecBase *base, const cha
  * @backend: the backend; @backend->library and @backend->name set
  * @rows:    the rows it has, as VCB_GetInfo() reported (VCInfo.Codecs)
  *
- * Rows are kept as the backend gave them; the backend name is written when
- * a row is handed out, by VC_QueryCodec().  At most VC_CAPS_MAX rows are read; a backend that
+ * Rows are kept as the backend gave them; the backend name and what a chain
+ * adds (ChainOutputFormats) are written when a row is handed out, by
+ * VC_QueryCodec().  At most VC_CAPS_MAX rows are read; a backend that
  * answers fewer than it reported keeps the rows it gave (@backend->ncaps
  * counts them).
  *
@@ -127,7 +126,7 @@ static BOOL read_codec_table(struct VideoCodecBase *base, struct vc_backend *bac
  * @backend: the backend, not yet in the list
  *
  * Name order makes the choice between rows of equal priority the same every
- * time: vc_backend_for() keeps the first one it finds.
+ * time: vc_backend_choose() keeps the first one it finds.
  */
 static void insert_sorted(struct VideoCodecBase *base, struct vc_backend *backend)
 {
@@ -193,11 +192,12 @@ static BOOL backend_handshake(struct vc_backend *backend, ULONG *rows)
 	LONG rc = VCB_GetInfo(&info);
 	if (rc != 0 || !VC_HAS_FIELD(info.Size, struct VCInfo, Codecs) || VCB_ABI_MAJOR(info.ABIVersion) != VCB_ABI_VERSION_MAJOR)
 	{
-		Kprintf("[videocodec] %s: ABI %ld.%ld, not %ld.x (%ld)\n", backend->name, VCB_ABI_MAJOR(info.ABIVersion), info.ABIVersion & 0xffffu,
+		Kprintf("[videocodec] %s: ABI %ld.%ld, not %ld.x (%ld)\n", backend->name, VCB_ABI_MAJOR(info.ABIVersion), VCB_ABI_MINOR(info.ABIVersion),
 		        (ULONG)VCB_ABI_VERSION_MAJOR, rc);
 		return FALSE;
 	}
 	*rows = info.Codecs;
+	backend->abi = info.ABIVersion;
 	return TRUE;
 }
 
@@ -366,24 +366,96 @@ void vc_backends_load(struct VideoCodecBase *base)
 }
 
 /**
- * vc_backend_for() - Choose the backend for a session or an image call.
- * @base:  the library base, lock held, list loaded
- * @codec: VCC_*
- * @kind:  VCK_*
- * @name:  the backend a program asked for (VCA_Backend), with or without
- *         ".codec", in any case; NULL to leave the choice to the library
- * @use:   VCCF_Session or VCCF_Image: what the row must serve
+ * vc_format_mask() - A format's bit in a row's format masks.
+ * @format: VCF_*, 0 for none
  *
- * Looks at every backend's row for @codec and @kind that serves @use and
- * takes the one of the highest priority; between equal priorities the
- * backend first in name order.  With @name, only that backend is looked at.
- *
- * Return: the backend, or NULL if none has such a row.
+ * Return: VCF_MASK(@format); 0 for none, and for a number past the masks'
+ * VC_FORMAT_BITS bits, which no row can hold.
  */
-struct vc_backend *vc_backend_for(struct VideoCodecBase *base, ULONG codec, ULONG kind, const char *name, ULONG use)
+ULONG vc_format_mask(ULONG format)
+{
+	return format != 0 && format < VC_FORMAT_BITS ? VCF_MASK(format) : 0u;
+}
+
+/**
+ * vc_row_takes() - Whether a row reads and writes the pictures a choice asks for.
+ * @row:  the row
+ * @want: what is asked; a mask of 0 asks nothing
+ *
+ * Return: TRUE when the row reads one of @want->reads and writes one of
+ * @want->writes.
+ */
+BOOL vc_row_takes(const struct VCCodecInfo *row, const struct vc_choice *want)
+{
+	return (want->reads == 0 || (row->InputFormats & want->reads) != 0) &&
+	       (want->writes == 0 || (row->OutputFormats & want->writes) != 0);
+}
+
+/**
+ * row_serves() - Whether a row is one of a choice's at all: its codec and kind, the use, the FourCC.
+ * @row:  the row
+ * @want: what is asked
+ * @tag:  @want->tag in upper case (vc_tag_fold())
+ *
+ * A row with a Tag serves only that FourCC, in any case: a backend that
+ * decodes one form of a codec (MS-MPEG4 v3, VC-1's WMV3) is not handed
+ * another.  A row without one serves every form.
+ *
+ * Return: TRUE when it serves.
+ */
+static BOOL row_serves(const struct VCCodecInfo *row, const struct vc_choice *want, ULONG tag)
+{
+	if (row->Codec != want->codec || row->Kind != want->kind || (row->Flags & want->use) == 0)
+		return FALSE;
+	return row->Tag == 0 || (want->tag != 0 && vc_tag_fold(row->Tag) == tag);
+}
+
+/**
+ * ranks_above() - Whether one serving row beats another for a choice.
+ * @row:  the row looked at
+ * @best: the best one so far
+ * @want: what is asked
+ *
+ * In this order: a row that takes the pictures asked for (vc_row_takes()),
+ * so that a converter or encoder of lower priority serves what a higher one
+ * cannot; the higher priority; a row of the session's own FourCC over one of
+ * every form.  A tie keeps @best, the backend first in name order.
+ *
+ * Return: TRUE when @row ranks above @best.
+ */
+static BOOL ranks_above(const struct VCCodecInfo *row, const struct VCCodecInfo *best, const struct vc_choice *want)
+{
+	BOOL takes = vc_row_takes(row, want);
+	if (takes != vc_row_takes(best, want))
+		return takes;
+	if (row->Priority != best->Priority)
+		return row->Priority > best->Priority;
+	return row->Tag != 0 && best->Tag == 0;
+}
+
+/**
+ * vc_backend_choose() - The backend for a session, an image call or a chain's converter, and the row that won.
+ * @base: the library base, lock held, list loaded
+ * @want: the codec, its FourCC, the kind, the use, the pictures read and written
+ * @name: the backend a program asked for (VCA_Backend), with or without
+ *        ".codec", in any case; NULL to leave the choice to the library
+ * @row:  where the winning row goes (NULL when none); may be NULL
+ *
+ * Of every row that serves @want (row_serves()), the one that ranks highest
+ * (ranks_above()); with @name, only that backend's rows.  A row that does
+ * not take the pictures asked for still wins when no row does: its
+ * backend's refusal says why, as before there was a choice by format.  A
+ * caller that must have the pictures taken checks the row with
+ * vc_row_takes().
+ *
+ * Return: the backend, or NULL when no row serves @want.
+ */
+struct vc_backend *vc_backend_choose(struct VideoCodecBase *base, const struct vc_choice *want, const char *name,
+                                     const struct VCCodecInfo **row)
 {
 	struct vc_backend *best = NULL;
-	LONG best_priority = 0;
+	const struct VCCodecInfo *best_row = NULL;
+	ULONG tag = vc_tag_fold(want->tag);
 	for (struct MinNode *node = base->backends.mlh_Head; node->mln_Succ != NULL; node = node->mln_Succ)
 	{
 		struct vc_backend *backend = BE_FROM_NODE(node);
@@ -391,16 +463,18 @@ struct vc_backend *vc_backend_for(struct VideoCodecBase *base, ULONG codec, ULON
 			continue;
 		for (ULONG i = 0; i < backend->ncaps; i++)
 		{
-			const struct VCCodecInfo *row = &backend->caps[i];
-			if (row->Codec != codec || row->Kind != kind || (row->Flags & use) == 0)
+			const struct VCCodecInfo *candidate = &backend->caps[i];
+			if (!row_serves(candidate, want, tag))
 				continue;
-			if (best == NULL || row->Priority > best_priority)
+			if (best_row == NULL || ranks_above(candidate, best_row, want))
 			{
 				best = backend;
-				best_priority = row->Priority;
+				best_row = candidate;
 			}
 		}
 	}
+	if (row != NULL)
+		*row = best_row;
 	return best;
 }
 
@@ -413,8 +487,9 @@ struct vc_backend *vc_backend_for(struct VideoCodecBase *base, ULONG codec, ULON
  * @base:  the library base (A6)
  *
  * Copies the row into @info up to the smaller of the caller's Size and the
- * library's, then the backend's file name into Backend (for VCA_Backend),
- * if the caller's structure has it.  Size ends up as what was copied.
+ * library's, then the backend's file name into Backend (for VCA_Backend) and
+ * what a chain adds into ChainOutputFormats (chain_output_formats()), as far
+ * as the caller's structure has them.  Size ends up as what was copied.
  *
  * Return: 0, or VCERR_BADPARAM past the last row or for a bad @info.
  */
@@ -437,6 +512,8 @@ LONG VC_QueryCodec(ULONG index asm("d0"), struct VCCodecInfo *info asm("a0"), st
 			info->Size = size;
 			if (VC_HAS_FIELD(size, struct VCCodecInfo, Backend))
 				strlcpy((char *)info->Backend, backend->name, sizeof(info->Backend));
+			if (VC_HAS_FIELD(size, struct VCCodecInfo, ChainOutputFormats))
+				info->ChainOutputFormats = chain_output_formats(base, backend, &backend->caps[index]);
 			rc = 0;
 		}
 		else

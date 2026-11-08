@@ -163,7 +163,7 @@ ULONG still_between(const struct image_facts *info)
 static u64 picture_bytes(ULONG format, u32 width, u32 height, u32 pitch)
 {
 	struct vc_geometry geometry;
-	return picture_geometry(format, width, height, pitch, FALSE, &geometry) ? geometry.size : 0u;
+	return picture_geometry(format, width, height, pitch, &geometry) ? geometry.size : 0u;
 }
 
 /**

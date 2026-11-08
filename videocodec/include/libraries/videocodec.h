@@ -155,6 +155,9 @@
  *   frames, give an output size.
  * - A VC_SetAttrsTags() that changes the output geometry replaces that side's
  *   objects: the old pointers are gone, import again if they were yours.
+ *   Output tags left out keep their values; a new format or width without
+ *   VCA_OutputPitch drops the pitch set before, and VCA_DestRect and
+ *   VCA_KeepAspect replace each other.
  * - Objects and info structures start with Size and may grow at their end:
  *   read only up to Size (VC_HAS_FIELD()).  Events come by value, nothing to
  *   release.
@@ -166,6 +169,15 @@
  *   and kind has the highest Priority (hardware above software; per codec,
  *   so one backend may be hardware for one codec and software for another),
  *   unless VCA_Backend names one.
+ * - A decoder asked for an output format its row does not write gets a
+ *   converter behind it, inside the same session: the decoder runs natively,
+ *   the converter (opened when the stream's shape is known) makes your
+ *   format, size and place, and you see its frames and the decoder's packets.
+ *   VC_ImportFrame() of output frames works once VCEV_StreamInfo came.  A new
+ *   shape brings a new converter with its VCEV_StreamInfo: frames you hold
+ *   stay valid until you release them, and frames you imported are imported
+ *   again.  VC_QueryCodec() lists what such a converter adds in a decoder
+ *   row's ChainOutputFormats, so a format can be chosen before the open.
  */
 #ifndef LIBRARIES_VIDEOCODEC_H
 #define LIBRARIES_VIDEOCODEC_H
@@ -211,13 +223,36 @@ typedef long long VCTime; /* a timestamp in microseconds */
 #define VCC_H264 1  /* Annex-B byte stream; SPS/PPS in the stream or in VCA_Extradata */
 #define VCC_MJPEG 2 /* one baseline JPEG per picture */
 #define VCC_JPEG 3  /* a single JPEG picture */
-#define VCC_H265 4  /* reserved */
+#define VCC_H265 4  /* Annex-B byte stream; VPS/SPS/PPS in the stream or in VCA_Extradata (Annex-B or hvcC) */
 #define VCC_Raw 5   /* uncompressed: the converter's codec */
 #define VCC_PNG 6   /* a PNG picture */
 #define VCC_GIF 7   /* a GIF picture: its first image */
 #define VCC_BMP 8   /* a Windows BMP picture */
 #define VCC_TGA 9   /* a Truevision TGA picture */
 #define VCC_PPM 10  /* a binary PPM or PGM picture (P6, P5) */
+#define VCC_MPEG1 11    /* MPEG-1 video: an elementary stream with start codes, any cut; the sequence header in it or in VCA_Extradata */
+#define VCC_MPEG2 12    /* MPEG-2 video (H.262): as MPEG-1; interlaced pictures flagged VCFF_Interlaced */
+#define VCC_MPEG4 13    /* MPEG-4 Part 2 (DivX 4 on, Xvid): start codes, any cut; the VOL header in the stream or in VCA_Extradata */
+#define VCC_MSMPEG4 14  /* Microsoft MPEG-4 v1 to v3 (DivX 3): one picture per packet (VCA_Framed); the version from the container's FourCC */
+#define VCC_H263 15     /* H.263 and Sorenson Spark (FLV1): one picture per packet (VCA_Framed) */
+#define VCC_VP8 16      /* VP8: one frame per packet (VCA_Framed), as WebM and IVF hold them; no extradata */
+#define VCC_VP9 17      /* VP9: one frame or superframe per packet (VCA_Framed); no extradata */
+#define VCC_AV1 18      /* AV1: one temporal unit of low-overhead OBUs per packet (VCA_Framed); the av1C record in VCA_Extradata */
+#define VCC_VC1 19      /* VC-1: advanced profile (WVC1) with start codes, its sequence header in VCA_Extradata; simple and main
+                         * (WMV3) one picture per packet (VCA_Framed), the 4-byte STRUCT_C in VCA_Extradata */
+#define VCC_Theora 20   /* Theora: one frame per packet (VCA_Framed); its three header packets in VCA_Extradata, Xiph-laced */
+#define VCC_Cinepak 21  /* Cinepak (cvid): one frame per packet (VCA_Framed) */
+#define VCC_MSVideo1 22 /* Microsoft Video 1 (CRAM, MSVC): one frame per packet (VCA_Framed); an 8-bit stream's palette in VCA_Extradata */
+#define VCC_QTRLE 23    /* QuickTime Animation (rle ): one frame per packet (VCA_Framed) */
+
+/*
+ * A FourCC (VCA_CodecTag, VCCodecInfo.Tag, VC_CodecOfTag()): the four
+ * characters in the order the file holds them, the first in the top byte, as
+ * a big-endian read of AVI's biCompression or an MP4 sample entry's type gives
+ * them.  Case does not count where the library compares them.
+ */
+#define VC_FOURCC(a, b, c, d) \
+	(((ULONG)(UBYTE)(a) << 24) | ((ULONG)(UBYTE)(b) << 16) | ((ULONG)(UBYTE)(c) << 8) | (ULONG)(UBYTE)(d))
 
 /*
  * Pixel formats (VCA_InputFormat, VCA_OutputFormat, VCFrame.Format).  The
@@ -227,7 +262,7 @@ typedef long long VCTime; /* a timestamp in microseconds */
 #define VCF_Unknown 0
 #define VCF_I420 1   /* planar YUV 4:2:0: Y, U, V planes; a decoder's native output */
 #define VCF_YV12 2   /* planar YUV 4:2:0: Y, V, U planes */
-#define VCF_NV12 3   /* Y plane, then one plane of UV pairs */
+#define VCF_NV12 3   /* Y plane, then one plane of UV pairs right after the picture's own rows, in and out */
 #define VCF_RGB16 4  /* R5G6B5, little-endian 16-bit words [RGBFB_R5G6B5PC] */
 #define VCF_RGB24 5  /* R G B [RGBFB_R8G8B8] */
 #define VCF_BGR24 6  /* B G R [RGBFB_B8G8R8] */
@@ -235,8 +270,36 @@ typedef long long VCTime; /* a timestamp in microseconds */
 #define VCF_RGBA32 8 /* R G B A [RGBFB_R8G8B8A8] */
 #define VCF_YUYV 9   /* packed 4:2:2: Y U Y V [RGBFB_Y4U2V2] */
 #define VCF_UYVY 10  /* packed 4:2:2: U Y V Y */
+/*
+ * The column format: 8-bit 4:2:0 in columns 128 pixels wide, each the luma
+ * rows then the interleaved Cb Cr rows, rows a multiple of 16.  Width is the
+ * columns' pixels, Pitch[0] one column's bytes (128 times its rows),
+ * Offset[1] where the chroma rows start inside a column.  An H.265 decoder's
+ * native output; the VideoCore converter reads it, and a decoder session
+ * opened for any other format gets that converter behind it.
+ */
+#define VCF_NV12_COL128 11
+#define VCF_NV21 12   /* Y plane, then one plane of VU pairs right after the picture's own rows, in and out */
+#define VCF_I422 13   /* planar YUV 4:2:2: Y, U, V planes, chroma at half the width and every row */
+#define VCF_YVYU 14   /* packed 4:2:2: Y V Y U */
+#define VCF_VYUY 15   /* packed 4:2:2: V Y U Y */
+#define VCF_RGBX32 16 /* R G B, a byte not read or not written [RGBFB_R8G8B8A8, its alpha ignored] */
+#define VCF_BGRX32 17 /* B G R, a byte not read or not written [RGBFB_B8G8R8A8, its alpha ignored] */
+#define VCF_ARGB32 18 /* A R G B [RGBFB_A8R8G8B8] */
+#define VCF_ABGR32 19 /* A B G R [RGBFB_A8B8G8R8] */
+#define VCF_RGB16BE 20 /* R5G6B5, big-endian 16-bit words [RGBFB_R5G6B5] */
+#define VCF_RGB15 21   /* X1R5G5B5, little-endian 16-bit words [RGBFB_R5G5B5PC] */
+#define VCF_RGB15BE 22 /* X1R5G5B5, big-endian 16-bit words [RGBFB_R5G5B5] */
+#define VCF_CLUT8 23   /* one byte a pixel, an index into 256 colours [RGBFB_CLUT]; how the palette travels comes with its first codec */
+/*
+ * The 10-bit column format: as VCF_NV12_COL128, but each 128-byte column row
+ * holds 96 samples, three 10-bit ones in each little-endian 32-bit word, its
+ * top two bits unused.  Width is the columns' samples (96 a column).  An
+ * H.265 Main10 decoder's native output.
+ */
+#define VCF_NV12_10_COL128 24
 
-/* A format's bit in VCCodecInfo.OutputFormats and InputFormats, as RGBFF_ is to RGBFB_ */
+/* A format's bit in VCCodecInfo.OutputFormats and InputFormats, as RGBFF_ is to RGBFB_: formats stay below 32 */
 #define VCF_MASK(f) (1UL << (f))
 
 /* H.264 profiles (VCA_Profile) */
@@ -386,6 +449,10 @@ struct VCCodecInfo
 	LONG Priority;     /* 50 hardware, 0 software (VCB_PRIORITY_*): the row of the highest gets the session */
 	ULONG Flags;       /* VCCF_*: what the row serves */
 	ULONG InputFormats; /* VCF_MASK() of each VCF_* an encoder or converter reads, others refused; 0 for a decoder */
+	ULONG Tag;          /* VC_FOURCC() of the one form of the codec the row serves (VCA_CodecTag); 0 every form */
+	/* VCF_MASK() of each VCF_* a session of this decoder row also writes, through a converter the library puts behind
+	   it (none of OutputFormats); filled by the library, 0 on other rows */
+	ULONG ChainOutputFormats;
 };
 
 /* VCCodecInfo.Flags */
@@ -452,8 +519,10 @@ struct VCSession; /* opaque */
 /* Every session */
 #define VCA_Codec (VCA_Base + 1)     /* VCC_*: required for a session; the image calls default it (VC_DecodeImage: from the bytes) */
 #define VCA_Kind (VCA_Base + 2)      /* VCK_*, required */
-#define VCA_SigMask (VCA_Base + 19)  /* signal bits to Signal() when something is ready [none: poll yourself] */
-#define VCA_SigTask (VCA_Base + 18)  /* struct Task * to signal [the opener] */
+#define VCA_CodecTag (VCA_Base + 40) /* VC_FOURCC() the container names the codec by: picks among its forms, so that a row of
+                                     * another form (VCCodecInfo.Tag) is not chosen [0: the codec's every form]; the open's only */
+#define VCA_SigMask (VCA_Base + 19)  /* signal bits to Signal() when something is ready [none: poll yourself]; also with VC_SetAttrsTags() */
+#define VCA_SigTask (VCA_Base + 18)  /* struct Task * to signal [the opener]; also with VC_SetAttrsTags(), to hand the session to another task */
 #define VCA_ErrorPtr (VCA_Base + 32) /* LONG *: gets the VCERR_* when an open or an image call fails */
 #define VCA_Backend (VCA_Base + 31)  /* STRPTR: this backend, by its VCCodecInfo.Backend name, with or without .codec [the one with the codec's highest-priority row] */
 

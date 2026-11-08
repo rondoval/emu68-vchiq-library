@@ -37,4 +37,5 @@ LONG VC_ConvertImageTagList(struct TagItem *tags) (A0)
 ==varargs
 LONG VC_ConvertImageTags(Tag tag1, ...) (A0)
 LONG VC_GetImageInfo(APTR data, ULONG length, struct VCImageInfo *info) (A0,D0,A1)
+ULONG VC_CodecOfTag(ULONG tag) (D0)
 ==end

@@ -150,7 +150,7 @@ LONG shape_resolve(struct vc_session *session)
 		return VCERR_BADPARAM;
 
 	struct vc_geometry geometry;
-	if (!picture_geometry(format, row_pixels, height, pitch, FALSE, &geometry))
+	if (!picture_geometry(format, row_pixels, height, pitch, &geometry))
 		return VCERR_BADPARAM;
 
 	struct VCRect dest;

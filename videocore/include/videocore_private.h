@@ -145,5 +145,6 @@ LONG VCB_Flush(APTR handle asm("a0"), struct VideoCoreBase *base asm("a6"));
 LONG VCB_SetAttrs(APTR handle asm("a0"), struct VCSessionParams *params asm("a1"), struct VideoCoreBase *base asm("a6"));
 LONG VCB_Image(struct VCImageParams *params asm("a0"), struct VideoCoreBase *base asm("a6"));
 VOID VCB_Idle(struct VideoCoreBase *base asm("a6"));
+struct VCFrame *VCB_OutputFrame(APTR handle asm("a0"), ULONG index asm("d0"), struct VideoCoreBase *base asm("a6"));
 
 #endif /* VIDEOCORE_PRIVATE_H */

@@ -317,3 +317,21 @@ VOID VCB_Idle(struct VideoCoreBase *base asm("a6"))
 {
 	mmal_idle(base);
 }
+
+/**
+ * VCB_OutputFrame() - One of a session's own output frames (ABI 1.1).
+ * @handle: the session (A0)
+ * @index:  0 upward (D0)
+ * @base:   the library base (A6)
+ *
+ * Return: the frame, NULL past the last or before the shape is known.
+ */
+struct VCFrame *VCB_OutputFrame(APTR handle asm("a0"), ULONG index asm("d0"), struct VideoCoreBase *base asm("a6"))
+{
+	struct ExecBase *SysBase = base->SysBase;
+	ObtainSemaphore(&base->session_lock);
+	struct vc_session *session = session_lookup(base, handle);
+	struct VCFrame *frame = session != NULL ? session_output_frame(session, index) : NULL;
+	ReleaseSemaphore(&base->session_lock);
+	return frame;
+}

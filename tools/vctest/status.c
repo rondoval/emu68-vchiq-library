@@ -24,7 +24,7 @@
 #include "commands.h"
 
 const char status_template[] = "";
-const char codecs_template[] = "";
+const char codecs_template[] = "OF/M";
 
 /* vi_Bringup's values, by number */
 static const char *const bringups[] = {"fresh", "resumed", "repaired", "reinit"};
@@ -124,7 +124,7 @@ int do_status(struct tool *t, LONG *args)
 static const char *format_list(ULONG formats, char *out, ULONG room)
 {
 	ULONG at = 0;
-	for (ULONG f = 0; f < 32; f++)
+	for (ULONG f = 0; f < FORMAT_BITS; f++)
 	{
 		if (!(formats & VCF_MASK(f)))
 			continue;
@@ -139,16 +139,16 @@ static const char *format_list(ULONG formats, char *out, ULONG room)
 }
 
 /**
- * do_codecs() - CODECS: every row of the codec table.
+ * do_codecs() - CODECS: every row of the codec table; with OF, the codec of each FourCC given.
  * @t:    the tool
- * @args: none
+ * @args: OF, FourCCs (VC_CodecOfTag()), each printed as of.N.tag and of.N.codec
  *
  * Return: RETURN_OK; RETURN_FAIL when there is no row.
  */
 int do_codecs(struct tool *t, LONG *args)
 {
 	(void)t;
-	(void)args;
+	char tag[TAG_NAME_SIZE];
 	ULONG n = 0;
 	for (;; n++)
 	{
@@ -156,7 +156,7 @@ int do_codecs(struct tool *t, LONG *args)
 		ci.Size = sizeof(ci);
 		if (VC_QueryCodec(n, &ci) != 0)
 			break;
-		char list[128];
+		char list[256]; /* every format's name: about 150 characters */
 		kv_str(kv_at("codec", n, "name"), codec_name(ci.Codec));
 		kv_str(kv_at("codec", n, "kind"), kind_name(ci.Kind));
 		kv_str(kv_at("codec", n, "backend"), (const char *)ci.Backend);
@@ -165,13 +165,24 @@ int do_codecs(struct tool *t, LONG *args)
 		kv_unum(kv_at("codec", n, "level"), ci.MaxLevel);
 		if (ci.OutputFormats != 0)
 			kv_str(kv_at("codec", n, "output_formats"), format_list(ci.OutputFormats, list, sizeof(list)));
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, ChainOutputFormats) && ci.ChainOutputFormats != 0)
+			kv_str(kv_at("codec", n, "chain_output_formats"), format_list(ci.ChainOutputFormats, list, sizeof(list)));
 		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, InputFormats) && ci.InputFormats != 0)
 			kv_str(kv_at("codec", n, "input_formats"), format_list(ci.InputFormats, list, sizeof(list)));
 		kv_bool(kv_at("codec", n, "session"), (ci.Flags & VCCF_Session) != 0);
 		kv_bool(kv_at("codec", n, "image"), (ci.Flags & VCCF_Image) != 0);
 		kv_num(kv_at("codec", n, "priority"), ci.Priority);
+		if (VC_HAS_FIELD(ci.Size, struct VCCodecInfo, Tag) && ci.Tag != 0)
+			kv_str(kv_at("codec", n, "tag"), tag_name(ci.Tag, tag));
 	}
 	kv_unum("codecs", n);
+	const char *const *of = (const char *const *)args[0];
+	for (ULONG i = 0; of != NULL && of[i] != NULL; i++)
+	{
+		ULONG fourcc = tag_of_name(of[i]);
+		kv_str(kv_at("of", i, "tag"), of[i]);
+		kv_str(kv_at("of", i, "codec"), fourcc != 0 ? codec_name(VC_CodecOfTag(fourcc)) : "?");
+	}
 	if (n == 0)
 	{
 		kv_str("fail", "no codecs");
